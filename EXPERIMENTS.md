@@ -21,3 +21,12 @@ Template:
 - CV: pending — run `python -m ev_s6e9 train` after `download` (appends a scored chunk below)
 - LB: —
 - Takeaway: first baseline scaffold; fill CV from a real-data train run
+### 2026-09-09 — LightGBM n_estimators=800 lr=0.05 num_leaves=31, raw+charging_total, 5-fold
+- CV: 0.94171 ± 0.00073
+- LB: —
+- Takeaway: auto-logged from train
+
+### 2026-09-09 — first Kaggle submit (same LGBM baseline)
+- CV: 0.94171 ± 0.00073
+- LB: 0.94150
+- Takeaway: CV≈LB; solid first score, room vs ~0.95 leaders
