@@ -1,74 +1,82 @@
-# EV Purchase Prediction (Kaggle S6E9)
+# EV purchase notebooks (Kaggle S6E9)
 
-Python baseline for [Predicting Electric Vehicle Purchases](https://www.kaggle.com/competitions/playground-series-s6e9)
-(`playground-series-s6e9`). Metric: **ROC-AUC**. Target: `Will_Buy_EV` (probability).
-Submission columns: `id,Will_Buy_EV`.
+Marimo-first workspace for [Predicting Electric Vehicle Purchases](https://www.kaggle.com/competitions/playground-series-s6e9)
+(`playground-series-s6e9`, ROC-AUC, submit `id,Will_Buy_EV`).
 
-## Layout
+**Primary UX:** interactive marimo notebooks (EDA, features, training log) on **GitHub Pages**.
+`src/ev_s6e9/` is the small library those notebooks (and the optional CLI) call.
 
-```
-src/ev_s6e9/     data, features, model, train, predict, submit, viz, experiments
-tests/           pure helpers + import/train smoke
-data/raw/        train.csv test.csv sample_submission.csv  (gitignored)
-outputs/         oof.csv models/ submission.csv cv.json     (gitignored)
-reports/         target rate, distributions, importance
-EXPERIMENTS.md   append-only CV / LB log (train can append)
-```
+## GitHub Pages
 
-## Setup
+After merge to `main`:
+
+1. Repo **Settings → Pages → Source: GitHub Actions**
+2. Push to `main` (or **Actions → Deploy to GitHub Pages → Run workflow**)
+
+Site:
+
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/notebooks/eda.html
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/notebooks/features.html
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/notebooks/training.html
+
+Export follows the [official marimo GitHub Pages template](https://github.com/marimo-team/marimo-gh-pages-template):
+`marimo export html-wasm … --mode edit` for `notebooks/` (see `.github/scripts/build.py` and `.github/workflows/deploy.yml`).
+The build writes `.nojekyll` and an index that links the notebooks.
+
+### WASM vs local (important)
+
+| | GitHub Pages (Pyodide / WASM) | Your machine |
+|---|---|---|
+| Data | committed `notebooks/public/*_sample.csv` (hundreds of rows) | `python -m ev_s6e9 download` → `data/raw/` (~670k train) |
+| Charts / EXPERIMENTS.md | yes | yes |
+| LightGBM 5-fold | **no** | `python -m ev_s6e9 train` |
+| Kaggle credentials | **never** | `~/.kaggle/kaggle.json` for download/submit |
+
+Pages must not ship full `train.csv` or secrets.
+
+## Run notebooks locally
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/wTaylorBickelmann/ev-purchase-kaggle
 cd ev-purchase-kaggle
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install -e ".[dev]"
+pip install -e ".[dev,nb]"
 ```
 
-Or: `pip install -r requirements.txt` then `pip install -e .`
-
-## Kaggle credentials
-
-Download needs `~/.kaggle/kaggle.json` (from [Kaggle settings](https://www.kaggle.com/settings)):
-
 ```bash
-mkdir -p ~/.kaggle
-chmod 600 ~/.kaggle/kaggle.json
+marimo edit notebooks/eda.py
+marimo edit notebooks/features.py
+marimo edit notebooks/training.py
 ```
 
-Join the competition in the browser first, or the CLI download/submit will 403.
+Or all: `marimo edit notebooks/`
 
-This repo never commits credentials or competition CSVs.
-
-## Download → train → predict → submit
+Local export smoke (same script as CI):
 
 ```bash
+uv run .github/scripts/build.py
+python -m http.server -d _site
+```
+
+## Local train / predict / submit (CLI)
+
+Still the way to make a leaderboard submission:
+
+```bash
+# ~/.kaggle/kaggle.json  (chmod 600) + join the competition in the browser
 python -m ev_s6e9 download
-python -m ev_s6e9 train
-python -m ev_s6e9 predict
+python -m ev_s6e9 train          # mean AUC ± std; appends EXPERIMENTS.md
+python -m ev_s6e9 predict        # outputs/submission.csv
 python -m ev_s6e9 submit -m "lgbm 5-fold baseline"
 ```
 
-Equivalent submit:
+`train` is append-only on `EXPERIMENTS.md` (`--no-log` to skip; `--note "…"` for the takeaway).
+Do not edit old experiment chunks.
 
-```bash
-kaggle competitions submit -c playground-series-s6e9 -f outputs/submission.csv -m "lgbm 5-fold baseline"
-```
-
-`train` runs stratified 5-fold LightGBM, prints **mean AUC ± std**, writes `outputs/`,
-plots under `reports/`, and **appends** a chunk to `EXPERIMENTS.md` (use `--no-log` to skip;
-`--note "one-line takeaway"` to set the takeaway). Do not rewrite old experiment entries.
-
-EDA only: `python -m ev_s6e9 eda`
-
-## No credentials on this machine?
-
-The pipeline still runs on schema-accurate synthetic CSVs (same column names as the
-competition: `id`, `Age`, `Annual_Income_USD`, `Daily_Commute_km`, `Number_of_Cars_Owned`,
-`Charging_Stations_Near_Home`, `Charging_Stations_Near_Work`, `Environmental_Concern_Level`,
-`Gender`, `City_Type`, `Current_Car_Type`, `Home_Charging_Possible`, `Subsidy_Available`,
-`Range_Anxiety_Level`, `Will_Buy_EV`):
+No credentials? Schema-accurate fake CSVs (same column names, not for LB):
 
 ```bash
 python -m ev_s6e9 download --synth
@@ -76,19 +84,21 @@ python -m ev_s6e9 train --synth
 python -m ev_s6e9 predict
 ```
 
-`--synth` train does **not** append to `EXPERIMENTS.md`. Real leaderboard numbers need
-`~/.kaggle/kaggle.json` and `python -m ev_s6e9 download` (no `--synth`).
+## Layout
+
+```
+notebooks/           marimo apps (thin; call the library)
+notebooks/public/    sample CSVs + staged WASM copy of ev_s6e9 (CI)
+src/ev_s6e9/         data, features, model, train, predict, submit, viz, experiments, nb
+.github/scripts/build.py    official-template html-wasm export + index
+.github/workflows/deploy.yml
+EXPERIMENTS.md       append-only CV / LB log
+```
+
+Columns (do not invent others): `id, Age, Annual_Income_USD, Daily_Commute_km, Number_of_Cars_Owned, Charging_Stations_Near_Home, Charging_Stations_Near_Work, Environmental_Concern_Level, Gender, City_Type, Current_Car_Type, Home_Charging_Possible, Subsidy_Available, Range_Anxiety_Level, Will_Buy_EV`.
 
 ## Tests
 
 ```bash
 pytest
 ```
-
-## First leaderboard submission
-
-1. Add `kaggle.json`, join the competition.
-2. `python -m ev_s6e9 download && python -m ev_s6e9 train && python -m ev_s6e9 predict`
-3. Check `outputs/cv.json` (mean AUC ± std) and `outputs/submission.csv`.
-4. `python -m ev_s6e9 submit -m "lgbm 5-fold baseline"`
-5. Paste the public LB score into the new `EXPERIMENTS.md` chunk (`LB: —` → the score).

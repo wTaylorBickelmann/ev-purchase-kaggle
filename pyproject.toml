@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ev-s6e9"
 version = "0.1.0"
-description = "Kaggle playground-series-s6e9 baseline: Predicting Electric Vehicle Purchases"
+description = "Marimo notebooks + Kaggle playground-series-s6e9 EV purchase library"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+nb = ["marimo>=0.13"]
 
 [project.scripts]
 ev-s6e9 = "ev_s6e9.__main__:main"

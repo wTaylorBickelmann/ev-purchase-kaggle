@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ev_s6e9.experiments import HEADER, append_chunk, format_chunk
+from ev_s6e9.experiments import HEADER, append_chunk, format_chunk, parse_chunks
 
 
 def test_format_chunk_shape():
@@ -11,6 +11,13 @@ def test_format_chunk_shape():
     assert "- CV: 0.80000 ± 0.00100" in text
     assert "- LB: —" in text
     assert "- Takeaway: ok" in text
+
+
+def test_parse_chunks_ignores_template_fence():
+    text = "```\n### YYYY-MM-DD — x\n```\n\n### 2026-09-09 — real\n- CV: 1\n"
+    ch = parse_chunks(text)
+    assert len(ch) == 1
+    assert "real" in ch[0]
 
 
 def test_append_does_not_rewrite(tmp_path):

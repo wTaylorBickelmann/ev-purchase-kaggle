@@ -52,3 +52,19 @@ def append_chunk(chunk: str, path: Path | None = None) -> Path:
     with path.open("a", encoding="utf-8") as f:
         f.write(prefix + body)
     return path
+
+
+def parse_chunks(text: str) -> list[str]:
+    """Dated `### YYYY-MM-DD` chunks only (skips the template fence)."""
+    blocks: list[str] = []
+    cur: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if line.startswith("### ") and line[4:8].isdigit():
+            if cur:
+                blocks.append("".join(cur).strip())
+            cur = [line]
+        elif cur:
+            cur.append(line)
+    if cur:
+        blocks.append("".join(cur).strip())
+    return blocks

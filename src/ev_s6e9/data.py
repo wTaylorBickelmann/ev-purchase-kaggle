@@ -105,3 +105,18 @@ def write_synth_raw(dest: Path | None = None, n_train: int = 400, n_test: int = 
 def has_real_data(raw: Path | None = None) -> bool:
     raw = raw or DATA_RAW
     return (raw / "train.csv").exists() and (raw / "test.csv").exists()
+
+
+def write_pages_samples(
+    dest: Path | None = None, n_train: int = 400, n_test: int = 80
+) -> Path:
+    """Committed-size CSVs for GitHub Pages / WASM (not the competition files)."""
+    from ev_s6e9.paths import NOTEBOOKS_PUBLIC
+
+    dest = dest or NOTEBOOKS_PUBLIC
+    dest.mkdir(parents=True, exist_ok=True)
+    synth(n_train, seed=0, target=True).to_csv(dest / "train_sample.csv", index=False)
+    synth(n_test, seed=1, target=False, start_id=n_train).to_csv(
+        dest / "test_sample.csv", index=False
+    )
+    return dest
