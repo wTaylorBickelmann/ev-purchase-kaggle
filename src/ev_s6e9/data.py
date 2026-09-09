@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from ev_s6e9.paths import DATA_RAW, SAMPLE_CSV, TEST_CSV, TRAIN_CSV
-from ev_s6e9.schema import COMPETITION, ID_COL, TARGET, TEST_COLS, TRAIN_COLS, check_cols
+from ev_s6e9.schema import COMPETITION, ID_COL, TARGET, TEST_COLS, TRAIN_COLS, check_exact
 
 _GENDERS = ["Male", "Female"]
 _CITIES = ["Urban", "Suburban", "Rural"]
@@ -22,14 +22,14 @@ _ANX = ["Low", "Medium", "High"]
 def load_train(path: Path | None = None) -> pd.DataFrame:
     p = path or TRAIN_CSV
     df = pd.read_csv(p)
-    check_cols(df.columns, TRAIN_COLS, "train")
+    check_exact(df.columns, TRAIN_COLS, "train")
     return df
 
 
 def load_test(path: Path | None = None) -> pd.DataFrame:
     p = path or TEST_CSV
     df = pd.read_csv(p)
-    check_cols(df.columns, TEST_COLS, "test")
+    check_exact(df.columns, TEST_COLS, "test")
     return df
 
 
@@ -85,9 +85,9 @@ def synth(n: int = 200, seed: int = 0, *, target: bool = True, start_id: int = 0
             df["Range_Anxiety_Level"] == "High"
         )
         df[TARGET] = (rng.random(n) < p.clip(0.05, 0.95)).astype(int)
-        check_cols(df.columns, TRAIN_COLS, "synth")
+        check_exact(df.columns, TRAIN_COLS, "synth")
     else:
-        check_cols(df.columns, TEST_COLS, "synth")
+        check_exact(df.columns, TEST_COLS, "synth")
     return df
 
 

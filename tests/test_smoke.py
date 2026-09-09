@@ -7,7 +7,7 @@ import pandas as pd
 import ev_s6e9
 from ev_s6e9.data import synth
 from ev_s6e9.predict import predict
-from ev_s6e9.schema import SUB_COLS, check_cols, TRAIN_COLS
+from ev_s6e9.schema import SUB_COLS, TRAIN_COLS
 from ev_s6e9.train import train
 
 
@@ -29,7 +29,9 @@ def test_package_imports():
 
 def test_synth_schema():
     tr = synth(12, seed=0, target=True)
-    check_cols(tr.columns, TRAIN_COLS, "train")
+    te = synth(5, seed=1, target=False)
+    assert list(tr.columns) == TRAIN_COLS
+    assert list(te.columns) == [c for c in TRAIN_COLS if c != "Will_Buy_EV"]
 
 
 def test_train_predict_smoke(tmp_path):

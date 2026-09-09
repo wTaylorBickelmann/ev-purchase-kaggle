@@ -1,9 +1,34 @@
-"""Competition column names. Do not invent extras."""
+"""Competition column names. Do not invent extras.
+
+train.csv (~668665 rows) and test.csv (~286571, no target) use exactly these names.
+"""
 
 from __future__ import annotations
 
 ID_COL = "id"
 TARGET = "Will_Buy_EV"
+
+# train.csv header, in file order
+TRAIN_COLS = [
+    "id",
+    "Age",
+    "Annual_Income_USD",
+    "Daily_Commute_km",
+    "Number_of_Cars_Owned",
+    "Charging_Stations_Near_Home",
+    "Charging_Stations_Near_Work",
+    "Environmental_Concern_Level",
+    "Gender",
+    "City_Type",
+    "Current_Car_Type",
+    "Home_Charging_Possible",
+    "Subsidy_Available",
+    "Range_Anxiety_Level",
+    "Will_Buy_EV",
+]
+
+TEST_COLS = [c for c in TRAIN_COLS if c != TARGET]
+SUB_COLS = [ID_COL, TARGET]
 
 NUM_COLS = [
     "Age",
@@ -25,9 +50,6 @@ CAT_COLS = [
 ]
 
 FEATURE_COLS = NUM_COLS + CAT_COLS
-TRAIN_COLS = [ID_COL, *FEATURE_COLS, TARGET]
-TEST_COLS = [ID_COL, *FEATURE_COLS]
-SUB_COLS = [ID_COL, TARGET]
 
 COMPETITION = "playground-series-s6e9"
 
@@ -41,6 +63,13 @@ def check_cols(have, cols: list[str], name: str) -> None:
     miss = missing_cols(cols, have)
     if miss:
         raise ValueError(f"{name} missing columns: {miss}")
+
+
+def check_exact(have, cols: list[str], name: str) -> None:
+    """Require the competition header, in order — no invented names."""
+    got = list(have)
+    if got != list(cols):
+        raise ValueError(f"{name} columns must be {list(cols)}, got {got}")
 
 
 def check_submission(df) -> None:
