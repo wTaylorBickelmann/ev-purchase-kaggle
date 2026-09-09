@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S6E9 report gallery</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; color: #222; }
+    nav a { margin-right: 1rem; }
+    img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+    pre, table { font-family: ui-monospace, monospace; font-size: 0.85rem; overflow-x: auto; }
+    pre { background: #f6f6f6; padding: 1rem; white-space: pre-wrap; }
+    table { border-collapse: collapse; }
+    td, th { border: 1px solid #ccc; padding: 0.25rem 0.5rem; text-align: left; }
+    .note { background: #fff8e5; padding: 0.75rem 1rem; border: 1px solid #e6d9a8; }
+    footer { margin-top: 2rem; color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+<nav>
+  <a href="index.html">Gallery</a>
+  <a href="eda.html">EDA</a>
+  <a href="features.html">Features</a>
+  <a href="training.html">Training</a>
+</nav>
+
+<h1>Predicting Electric Vehicle Purchases</h1>
+<p class="note">Figures from <strong>data/raw/train.csv (100000+ rows)</strong>.</p>
+<p>Kaggle <a href="https://www.kaggle.com/competitions/playground-series-s6e9">playground-series-s6e9</a>
+· metric ROC-AUC · target <code>Will_Buy_EV</code>. This site is a <strong>read-only gallery</strong>
+of already-run EDA / features / training — visitors do not download data or fit models.</p>
+<ul>
+  <li><a href="eda.html">EDA</a> — target rate, distributions (668,665 rows in the plot frame)</li>
+  <li><a href="features.html">Data engineering</a> — <code>prep_x</code>, <code>charging_total</code>, target by category</li>
+  <li><a href="training.html">Training</a> — EXPERIMENTS.md, CV / LB</li>
+</ul>
+<p>Latest experiment chunk:</p>
+<pre>### 2026-09-09 — first Kaggle submit (same LGBM baseline)
+- CV: 0.94171 ± 0.00073
+- LB: 0.94150
+- Takeaway: CV≈LB; solid first score, room vs ~0.95 leaders</pre>
+
+<footer>Read-only reports. New experiments: local <code>marimo edit</code> / <code>python -m ev_s6e9 train</code>.</footer>
+</body>
+</html>

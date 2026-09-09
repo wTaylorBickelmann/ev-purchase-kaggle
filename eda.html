@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EDA</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; color: #222; }
+    nav a { margin-right: 1rem; }
+    img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+    pre, table { font-family: ui-monospace, monospace; font-size: 0.85rem; overflow-x: auto; }
+    pre { background: #f6f6f6; padding: 1rem; white-space: pre-wrap; }
+    table { border-collapse: collapse; }
+    td, th { border: 1px solid #ccc; padding: 0.25rem 0.5rem; text-align: left; }
+    .note { background: #fff8e5; padding: 0.75rem 1rem; border: 1px solid #e6d9a8; }
+    footer { margin-top: 2rem; color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+<nav>
+  <a href="index.html">Gallery</a>
+  <a href="eda.html">EDA</a>
+  <a href="features.html">Features</a>
+  <a href="training.html">Training</a>
+</nav>
+
+<h1>EDA</h1>
+<p class="note">Figures from <strong>data/raw/train.csv (100000+ rows)</strong>.</p>
+<p>Competition header: <code>id, Age, Annual_Income_USD, Daily_Commute_km, Number_of_Cars_Owned, Charging_Stations_Near_Home, Charging_Stations_Near_Work, Environmental_Concern_Level, Gender, City_Type, Current_Car_Type, Home_Charging_Possible, Subsidy_Available, Range_Anxiety_Level, Will_Buy_EV</code></p>
+<figure><img src="reports/target_rate.png" alt="Target rate"><figcaption>Target rate</figcaption></figure>
+<figure><img src="reports/numeric_dists.png" alt="Numeric distributions"><figcaption>Numeric distributions</figcaption></figure>
+<figure><img src="reports/cat_counts.png" alt="Categorical counts"><figcaption>Categorical counts</figcaption></figure>
+<h2>Sample rows</h2>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>id</th>
+      <th>Age</th>
+      <th>Annual_Income_USD</th>
+      <th>Daily_Commute_km</th>
+      <th>Number_of_Cars_Owned</th>
+      <th>Charging_Stations_Near_Home</th>
+      <th>Charging_Stations_Near_Work</th>
+      <th>Environmental_Concern_Level</th>
+      <th>Gender</th>
+      <th>City_Type</th>
+      <th>Current_Car_Type</th>
+      <th>Home_Charging_Possible</th>
+      <th>Subsidy_Available</th>
+      <th>Range_Anxiety_Level</th>
+      <th>Will_Buy_EV</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0</td>
+      <td>66</td>
+      <td>92887.0</td>
+      <td>23.4</td>
+      <td>2</td>
+      <td>3</td>
+      <td>7</td>
+      <td>1.0</td>
+      <td>Male</td>
+      <td>Suburban</td>
+      <td>Sedan</td>
+      <td>Yes</td>
+      <td>No</td>
+      <td>Low</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>38</td>
+      <td>30000.0</td>
+      <td>5.0</td>
+      <td>1</td>
+      <td>2</td>
+      <td>2</td>
+      <td>4.0</td>
+      <td>Male</td>
+      <td>Rural</td>
+      <td>SUV</td>
+      <td>Yes</td>
+      <td>No</td>
+      <td>Low</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>26</td>
+      <td>94389.0</td>
+      <td>36.8</td>
+      <td>1</td>
+      <td>8</td>
+      <td>15</td>
+      <td>5.0</td>
+      <td>Female</td>
+      <td>Urban</td>
+      <td>Sedan</td>
+      <td>No</td>
+      <td>Yes</td>
+      <td>Low</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>66</td>
+      <td>73580.0</td>
+      <td>23.7</td>
+      <td>2</td>
+      <td>6</td>
+      <td>9</td>
+      <td>3.0</td>
+      <td>Male</td>
+      <td>Suburban</td>
+      <td>Hatchback</td>
+      <td>Yes</td>
+      <td>No</td>
+      <td>Low</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>54</td>
+      <td>57898.0</td>
+      <td>50.8</td>
+      <td>1</td>
+      <td>2</td>
+      <td>3</td>
+      <td>3.0</td>
+      <td>Male</td>
+      <td>Suburban</td>
+      <td>Hatchback</td>
+      <td>Yes</td>
+      <td>No</td>
+      <td>Low</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td>50</td>
+      <td>95938.0</td>
+      <td>55.1</td>
+      <td>2</td>
+      <td>8</td>
+      <td>15</td>
+      <td>3.0</td>
+      <td>Other</td>
+      <td>Urban</td>
+      <td>Sedan</td>
+      <td>No</td>
+      <td>No</td>
+      <td>Low</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td>55</td>
+      <td>109219.0</td>
+      <td>42.9</td>
+      <td>1</td>
+      <td>1</td>
+      <td>5</td>
+      <td>4.0</td>
+      <td>Male</td>
+      <td>Suburban</td>
+      <td>Sedan</td>
+      <td>Yes</td>
+      <td>Yes</td>
+      <td>Low</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td>7</td>
+      <td>45</td>
+      <td>60796.0</td>
+      <td>52.2</td>
+      <td>2</td>
+      <td>13</td>
+      <td>3</td>
+      <td>2.0</td>
+      <td>Other</td>
+      <td>Urban</td>
+      <td>SUV</td>
+      <td>No</td>
+      <td>Yes</td>
+      <td>Medium</td>
+      <td>No</td>
+    </tr>
+  </tbody>
+</table>
+
+<footer>Read-only reports. New experiments: local <code>marimo edit</code> / <code>python -m ev_s6e9 train</code>.</footer>
+</body>
+</html>
