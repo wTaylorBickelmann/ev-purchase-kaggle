@@ -1,6 +1,5 @@
-# Official marimo GitHub Pages pattern:
-# https://github.com/marimo-team/marimo-gh-pages-template
-# https://docs.marimo.io/guides/publishing/github/
+# Static report gallery for GitHub Pages.
+# python -m ev_s6e9 build_site
 
 name: Deploy to GitHub Pages
 
@@ -14,22 +13,34 @@ concurrency:
   group: "pages"
   cancel-in-progress: false
 
-env:
-  UV_SYSTEM_PYTHON: 1
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Export notebooks
+      - name: Install package
+        run: pip install -e .
+
+      - name: Optional full Kaggle download
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
-          uv run .github/scripts/build.py
-          find _site -maxdepth 3 | head -n 80
+          if [ -z "${KAGGLE_USERNAME}" ] || [ -z "${KAGGLE_KEY}" ]; then
+            echo "No Kaggle secrets — EDA figures use committed sample CSVs; EXPERIMENTS.md still published."
+            exit 0
+          fi
+          mkdir -p ~/.kaggle
+          python3 -c 'import json,os,pathlib; p=pathlib.Path.home()/".kaggle"/"kaggle.json"; p.write_text(json.dumps({"username":os.environ["KAGGLE_USERNAME"],"key":os.environ["KAGGLE_KEY"]})); p.chmod(0o600)'
+          python -m ev_s6e9 download
+
+      - name: Build static gallery
+        run: python -m ev_s6e9 build_site
 
       - name: Upload artifact
         if: github.event_name != 'pull_request'

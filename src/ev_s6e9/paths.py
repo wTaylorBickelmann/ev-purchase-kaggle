@@ -1,4 +1,4 @@
-"""Repo-relative paths. Works from an editable install and from WASM copies."""
+"""Repo-relative paths."""
 
 from __future__ import annotations
 

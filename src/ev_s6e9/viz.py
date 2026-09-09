@@ -57,6 +57,22 @@ def plot_cats(df: pd.DataFrame, out: Path | None = None) -> Path:
     return _save(fig, out or REPORTS / "cat_counts.png")
 
 
+def plot_target_by_cat(df: pd.DataFrame, out: Path | None = None) -> Path:
+    y = encode_target(df[TARGET])
+    tmp = df.assign(_y=y)
+    cols = [c for c in CAT_COLS if c in df.columns]
+    fig, axes = plt.subplots(2, 3, figsize=(9, 5))
+    for ax, c in zip(axes.ravel(), cols):
+        tmp.groupby(c, observed=False)["_y"].mean().plot(kind="bar", ax=ax, color="#3b7ddd")
+        ax.set_title(c, fontsize=8)
+        ax.set_ylabel("pos rate")
+        ax.tick_params(axis="x", labelrotation=30, labelsize=7)
+    for ax in axes.ravel()[len(cols) :]:
+        ax.axis("off")
+    fig.suptitle("P(Will_Buy_EV=1) by category")
+    return _save(fig, out or REPORTS / "target_by_cat.png")
+
+
 def plot_importance(path: Path | None = None, out: Path | None = None) -> Path | None:
     src = path or (OUTPUTS / "feature_importance.csv")
     if not src.exists():

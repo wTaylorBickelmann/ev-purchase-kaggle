@@ -1,13 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#     "marimo",
-#     "pandas",
-#     "numpy",
-#     "altair",
-# ]
+# dependencies = ["marimo", "pandas", "numpy", "altair"]
 # ///
-"""Feature inspection. Calls src/ev_s6e9.features."""
+"""Local feature inspection. Calls src/ev_s6e9.features."""
 
 import marimo
 
@@ -16,69 +11,32 @@ app = marimo.App(width="medium")
 
 
 @app.cell
-async def _():
-    import sys
-    from pathlib import Path
+def _():
     import marimo as mo
-
-    nd = Path(str(mo.notebook_dir()))
-    for p in (nd.parent / "src", Path.cwd() / "src"):
-        if (p / "ev_s6e9").is_dir() and str(p) not in sys.path:
-            sys.path.insert(0, str(p))
-            break
-    try:
-        import ev_s6e9.schema  # noqa: F401
-    except ImportError:
-        if sys.platform != "emscripten":
-            raise
-        from pyodide.http import pyfetch
-
-        dest = Path("/session/src/ev_s6e9")
-        dest.mkdir(parents=True, exist_ok=True)
-        loc = mo.notebook_location()
-        for name in (
-            "__init__.py",
-            "schema.py",
-            "features.py",
-            "experiments.py",
-            "paths.py",
-            "data.py",
-            "nb.py",
-        ):
-            r = await pyfetch(str(loc / "public" / "ev_s6e9" / name))
-            (dest / name).write_bytes(await r.bytes())
-        sys.path.insert(0, "/session/src")
-        import ev_s6e9.schema  # noqa: F401
-    return (mo,)
-
-
-@app.cell
-def _(mo):
     from ev_s6e9.features import split_xy
-    from ev_s6e9.nb import load_nb_train, wasm_banner
+    from ev_s6e9.nb import data_banner, load_nb_train
     from ev_s6e9.schema import CAT_COLS, FEATURE_COLS
 
-    loc = mo.notebook_location()
-    raw = load_nb_train(notebook_location=loc)
+    raw = load_nb_train()
     x, y = split_xy(raw)
     mo.md(
         f"""
         # Data engineering
 
-        {wasm_banner()}
+        {data_banner()}
 
-        `prep_x` / `split_xy` live in `src/ev_s6e9/features.py` (numeric coerce, categoricals, `charging_total`).
+        `prep_x` / `split_xy` in `src/ev_s6e9/features.py` (categoricals + `charging_total`).
         """
     )
-    return CAT_COLS, FEATURE_COLS, loc, raw, x, y
+    return CAT_COLS, FEATURE_COLS, mo, raw, x, y
 
 
 @app.cell
 def _(FEATURE_COLS, mo, raw, x):
     mo.md(
         f"""
-        - raw cols: {len(raw.columns)} — `{list(raw.columns)}`
-        - model matrix: {x.shape} — extra: `{[c for c in x.columns if c not in FEATURE_COLS]}`
+        - raw cols: {len(raw.columns)}
+        - model matrix: {x.shape} — extra `{[c for c in x.columns if c not in FEATURE_COLS]}`
         """
     )
     return

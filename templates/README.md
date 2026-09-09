@@ -1,4 +1,6 @@
-# Template Documentation
+# The live GitHub Pages site is built by `python -m ev_s6e9 build_site`
+# (static HTML in src/ev_s6e9/site.py), not these Jinja templates.
+
 
 ## Overview
 

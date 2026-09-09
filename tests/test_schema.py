@@ -53,5 +53,5 @@ def test_check_exact_rejects_invented_names():
 
 def test_cli_has_download_train_predict_submit():
     p = _parser()
-    for cmd in ("download", "train", "predict", "submit"):
+    for cmd in ("download", "train", "predict", "submit", "build_site"):
         p.parse_args([cmd] if cmd != "submit" else ["submit", "-m", "ok"])

@@ -1,4 +1,4 @@
-"""Thin CLI: python -m ev_s6e9 <download|train|predict|submit|eda>."""
+"""Thin CLI: python -m ev_s6e9 <download|train|predict|submit|eda|build_site>."""
 
 from __future__ import annotations
 
@@ -32,6 +32,10 @@ def _parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser("eda", help="write plots under reports/")
     e.add_argument("--synth", action="store_true")
+
+    b = sub.add_parser("build_site", help="static HTML report gallery → _site/")
+    b.add_argument("-o", "--out", default=None, help="output directory (default _site)")
+    b.add_argument("--sample", action="store_true", help="force committed sample (skip data/raw)")
     return p
 
 
@@ -109,6 +113,14 @@ def main(argv: list[str] | None = None) -> None:
 
         df = _need_train_csv(args.synth)
         eda(df)
+        return
+
+    if args.cmd == "build_site":
+        from pathlib import Path
+
+        from ev_s6e9.site import build_site
+
+        build_site(out=Path(args.out) if args.out else None, sample=args.sample)
 
 
 if __name__ == "__main__":
