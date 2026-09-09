@@ -28,7 +28,5 @@ reports/*.svg
 .ipynb_checkpoints/
 _site/
 notebooks/public/ev_s6e9/
-notebooks/public/EXPERIMENTS.md
-notebooks/public/reports/
 __marimo__/
 .marimo/

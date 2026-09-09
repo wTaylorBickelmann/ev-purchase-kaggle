@@ -1,13 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#     "marimo",
-#     "pandas",
-#     "numpy",
-#     "altair",
-# ]
+# dependencies = ["marimo", "pandas", "numpy", "altair"]
 # ///
-"""EDA for playground-series-s6e9. Logic lives in src/ev_s6e9/."""
+"""Local EDA. Pages gallery is `python -m ev_s6e9 build_site`, not this file."""
 
 import marimo
 
@@ -16,62 +11,23 @@ app = marimo.App(width="medium")
 
 
 @app.cell
-async def _():
-    import sys
-    from pathlib import Path
+def _():
     import marimo as mo
-
-    nd = Path(str(mo.notebook_dir()))
-    for p in (nd.parent / "src", Path.cwd() / "src"):
-        if (p / "ev_s6e9").is_dir() and str(p) not in sys.path:
-            sys.path.insert(0, str(p))
-            break
-    try:
-        import ev_s6e9.schema  # noqa: F401
-    except ImportError:
-        if sys.platform != "emscripten":
-            raise
-        from pyodide.http import pyfetch
-
-        dest = Path("/session/src/ev_s6e9")
-        dest.mkdir(parents=True, exist_ok=True)
-        loc = mo.notebook_location()
-        for name in (
-            "__init__.py",
-            "schema.py",
-            "features.py",
-            "experiments.py",
-            "paths.py",
-            "data.py",
-            "nb.py",
-        ):
-            r = await pyfetch(str(loc / "public" / "ev_s6e9" / name))
-            (dest / name).write_bytes(await r.bytes())
-        sys.path.insert(0, "/session/src")
-        import ev_s6e9.schema  # noqa: F401
-    return (mo,)
-
-
-@app.cell
-def _(mo):
     from ev_s6e9.features import encode_target
-    from ev_s6e9.nb import load_nb_train, wasm_banner
+    from ev_s6e9.nb import data_banner, load_nb_train
     from ev_s6e9.schema import CAT_COLS, NUM_COLS, TARGET, TRAIN_COLS
 
-    loc = mo.notebook_location()
-    df = load_nb_train(notebook_location=loc)
+    df = load_nb_train()
     mo.md(
         f"""
         # EDA — Will_Buy_EV
 
-        {wasm_banner()}
+        {data_banner()}
 
-        Columns (locked): `{", ".join(TRAIN_COLS)}`
-
-        Loaded **{len(df):,}** rows.
+        Columns: `{", ".join(TRAIN_COLS)}` · **{len(df):,}** rows.
         """
     )
-    return CAT_COLS, NUM_COLS, TARGET, df, encode_target, loc
+    return CAT_COLS, NUM_COLS, TARGET, df, encode_target, mo
 
 
 @app.cell
@@ -85,24 +41,18 @@ def _(TARGET, df, encode_target, mo):
         .rename_axis("Will_Buy_EV")
         .reset_index()
     )
-    chart = (
+    mo.ui.altair_chart(
         alt.Chart(rates)
         .mark_bar()
-        .encode(x="Will_Buy_EV:N", y="rate:Q", color="Will_Buy_EV:N")
-        .properties(title="Target rate", width=280, height=200)
+        .encode(x="Will_Buy_EV:N", y="rate:Q")
+        .properties(title="Target rate", width=280, height=200),
+        chart_selection=None,
     )
-    mo.ui.altair_chart(chart, chart_selection=None)
-    return alt, y
+    return alt,
 
 
 @app.cell
-def _(NUM_COLS, df, mo):
-    mo.md("### Sample + numeric describe")
-    return
-
-
-@app.cell
-def _(NUM_COLS, df):
+def _(df):
     df.head()
     return
 
@@ -114,7 +64,7 @@ def _(NUM_COLS, df):
 
 
 @app.cell
-def _(CAT_COLS, alt, df, mo):
+def _(CAT_COLS, mo):
     c = mo.ui.dropdown(options=list(CAT_COLS), value="City_Type", label="categorical")
     c
     return (c,)
@@ -124,10 +74,7 @@ def _(CAT_COLS, alt, df, mo):
 def _(alt, c, df, mo):
     vc = df[c.value].astype(str).value_counts().rename("n").rename_axis(c.value).reset_index()
     mo.ui.altair_chart(
-        alt.Chart(vc)
-        .mark_bar()
-        .encode(x=f"{c.value}:N", y="n:Q")
-        .properties(title=c.value, width=360, height=220),
+        alt.Chart(vc).mark_bar().encode(x=f"{c.value}:N", y="n:Q").properties(width=360, height=220),
         chart_selection=None,
     )
     return

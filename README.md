@@ -1,97 +1,85 @@
-# EV purchase notebooks (Kaggle S6E9)
+# EV purchase reports (Kaggle S6E9)
 
-Marimo-first workspace for [Predicting Electric Vehicle Purchases](https://www.kaggle.com/competitions/playground-series-s6e9)
+[Predicting Electric Vehicle Purchases](https://www.kaggle.com/competitions/playground-series-s6e9)
 (`playground-series-s6e9`, ROC-AUC, submit `id,Will_Buy_EV`).
 
-**Primary UX:** interactive marimo notebooks (EDA, features, training log) on **GitHub Pages**.
-`src/ev_s6e9/` is the small library those notebooks (and the optional CLI) call.
+**GitHub Pages is a read-only gallery** of already-run EDA, feature notes, and training
+metrics. Visitors do not execute notebooks, download ~670k rows, or fit LightGBM.
+
+Local `marimo edit` + `python -m ev_s6e9 train` are how you run new experiments.
 
 ## GitHub Pages
 
-After merge to `main`:
-
 1. Repo **Settings → Pages → Source: GitHub Actions**
-2. Push to `main` (or **Actions → Deploy to GitHub Pages → Run workflow**)
+2. Push `main` (or **Actions → Deploy to GitHub Pages → Run workflow**)
 
 Site:
 
 - https://wTaylorBickelmann.github.io/ev-purchase-kaggle/
-- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/notebooks/eda.html
-- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/notebooks/features.html
-- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/notebooks/training.html
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/eda.html
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/features.html
+- https://wTaylorBickelmann.github.io/ev-purchase-kaggle/training.html
 
-Export follows the [official marimo GitHub Pages template](https://github.com/marimo-team/marimo-gh-pages-template):
-`marimo export html-wasm … --mode edit` for `notebooks/` (see `.github/scripts/build.py` and `.github/workflows/deploy.yml`).
-The build writes `.nojekyll` and an index that links the notebooks.
+CI runs `python -m ev_s6e9 build_site` (static HTML + PNGs → `_site/`, plus `.nojekyll`).
+It is **not** `marimo export html-wasm`.
 
-### WASM vs local (important)
+Without Kaggle secrets, EDA charts use the committed sample CSVs
+(`notebooks/public/train_sample.csv`). **CV / LB come from `EXPERIMENTS.md`**
+(logged after a real local train). Optional repo secrets `KAGGLE_USERNAME` +
+`KAGGLE_KEY` make Actions download full `train.csv` so the figures match ~670k rows.
 
-| | GitHub Pages (Pyodide / WASM) | Your machine |
-|---|---|---|
-| Data | committed `notebooks/public/*_sample.csv` (hundreds of rows) | `python -m ev_s6e9 download` → `data/raw/` (~670k train) |
-| Charts / EXPERIMENTS.md | yes | yes |
-| LightGBM 5-fold | **no** | `python -m ev_s6e9 train` |
-| Kaggle credentials | **never** | `~/.kaggle/kaggle.json` for download/submit |
-
-Pages must not ship full `train.csv` or secrets.
-
-## Run notebooks locally
+Full-data gallery on a laptop (does not commit CSVs):
 
 ```bash
-git clone https://github.com/wTaylorBickelmann/ev-purchase-kaggle
-cd ev-purchase-kaggle
+python -m ev_s6e9 download
+python -m ev_s6e9 train          # appends EXPERIMENTS.md
+python -m ev_s6e9 build_site     # writes _site/
+python -m http.server -d _site
+```
+
+Then push the updated `EXPERIMENTS.md` (and optionally keep `_site/` local-only;
+CI rebuilds the gallery on the next `main` push).
+
+## Local notebooks (new work, not Pages)
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e ".[dev,nb]"
-```
-
-```bash
 marimo edit notebooks/eda.py
 marimo edit notebooks/features.py
 marimo edit notebooks/training.py
 ```
 
-Or all: `marimo edit notebooks/`
-
-Local export smoke (same script as CI):
+## Local train / predict / submit
 
 ```bash
-uv run .github/scripts/build.py
-python -m http.server -d _site
-```
-
-## Local train / predict / submit (CLI)
-
-Still the way to make a leaderboard submission:
-
-```bash
-# ~/.kaggle/kaggle.json  (chmod 600) + join the competition in the browser
+# ~/.kaggle/kaggle.json  (chmod 600) + join the competition
 python -m ev_s6e9 download
-python -m ev_s6e9 train          # mean AUC ± std; appends EXPERIMENTS.md
-python -m ev_s6e9 predict        # outputs/submission.csv
+python -m ev_s6e9 train
+python -m ev_s6e9 predict
 python -m ev_s6e9 submit -m "lgbm 5-fold baseline"
 ```
 
-`train` is append-only on `EXPERIMENTS.md` (`--no-log` to skip; `--note "…"` for the takeaway).
-Do not edit old experiment chunks.
+`train` appends `EXPERIMENTS.md` (`--no-log` to skip). Do not rewrite old chunks.
 
-No credentials? Schema-accurate fake CSVs (same column names, not for LB):
+No credentials? Schema-accurate fake CSVs (not for LB):
 
 ```bash
 python -m ev_s6e9 download --synth
 python -m ev_s6e9 train --synth
 python -m ev_s6e9 predict
+python -m ev_s6e9 build_site --sample
 ```
 
 ## Layout
 
 ```
-notebooks/           marimo apps (thin; call the library)
-notebooks/public/    sample CSVs + staged WASM copy of ev_s6e9 (CI)
-src/ev_s6e9/         data, features, model, train, predict, submit, viz, experiments, nb
-.github/scripts/build.py    official-template html-wasm export + index
-.github/workflows/deploy.yml
+notebooks/           local marimo (thin; call the library)
+notebooks/public/    small CSVs for sample EDA when data/raw is absent
+src/ev_s6e9/         data, features, model, train, predict, submit, viz, site, …
+_site/               generated static gallery (gitignored)
 EXPERIMENTS.md       append-only CV / LB log
 ```
 
