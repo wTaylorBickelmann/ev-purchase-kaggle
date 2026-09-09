@@ -9,10 +9,10 @@ from ev_s6e9.schema import CAT_COLS, FEATURE_COLS, ID_COL, NUM_COLS, TARGET, che
 
 def encode_target(s: pd.Series) -> pd.Series:
     """Map Yes/No / 1/0 / True/False to int {0,1}."""
-    if s.dtype == object or str(s.dtype) == "string":
-        m = s.astype(str).str.strip().str.lower()
-        return m.isin(["1", "yes", "true", "y"]).astype(int)
-    return (pd.to_numeric(s, errors="coerce") > 0).astype(int)
+    if pd.api.types.is_numeric_dtype(s):
+        return (pd.to_numeric(s, errors="coerce") > 0).astype(int)
+    m = s.astype(str).str.strip().str.lower()
+    return m.isin(["1", "yes", "true", "y"]).astype(int)
 
 
 def add_derived(x: pd.DataFrame) -> pd.DataFrame:

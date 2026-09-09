@@ -50,7 +50,8 @@ def run_cv(
         m.fit(
             x.iloc[tr],
             yv[tr],
-            eval_set=[(x.iloc[va], yv[va])],
+            eval_X=x.iloc[va],
+            eval_y=yv[va],
             callbacks=[
                 lgb.early_stopping(early_stopping, verbose=False),
                 lgb.log_evaluation(0),
