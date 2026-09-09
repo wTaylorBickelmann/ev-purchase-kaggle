@@ -1,0 +1,28 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Kaggle credentials and competition data
+kaggle.json
+.kaggle/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/
+
+# Large / generated artifacts
+outputs/*
+!outputs/.gitkeep
+reports/*.png
+reports/*.svg
+*.pkl
+*.joblib
+*.lgb
+*.txt.bak
+.ipynb_checkpoints/
