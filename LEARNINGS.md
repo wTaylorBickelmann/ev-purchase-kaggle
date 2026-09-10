@@ -10,3 +10,4 @@ Template:
 ---
 
 - (seed) 2026-09-10: bare hyperparam jitter without structural change is low-EV on this AUC plateau
+- 2026-09-10 exp0001: deotte-baseline → CV 0.94210 ± 0.00075 vs best 0.94210 ± 0.00075 — kill
