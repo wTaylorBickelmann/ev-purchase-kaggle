@@ -1,12 +1,12 @@
 # Qwen Code — project context
 
-This is the EV purchase Kaggle repo (`playground-series-s6e9`).
+EV purchase Kaggle (`playground-series-s6e9`).
 
-When invoked by `scripts/autoloop.py`:
+When `scripts/autoloop.py` invokes you:
 
-1. Read `outputs/RUN_BRIEF.md` first (authoritative for this iteration).
-2. Follow `prompts/loop_agent.md` and `CURSOR.md`.
-3. Implement one experiment; write `outputs/next_experiment.json`; stop.
-4. Do not Kaggle-submit; do not full-train real data (orchestrator does).
+1. Read `outputs/RUN_BRIEF.md` (only task card).
+2. One change in the new `exps/expNNNN/` folder.
+3. Follow `STRATEGY.md` / `LEARNINGS.md` / `prompts/loop_agent.md`.
+4. Do not full-train or Kaggle-submit; stop when config+NOTES are done.
 
-Human docs: `LOOP.md`, `STRATEGIES.md`, `EXPERIMENTS.md`.
+Docs: `LOOP.md`, `CURSOR.md`.

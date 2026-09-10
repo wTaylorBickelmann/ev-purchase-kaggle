@@ -1,114 +1,74 @@
-# Autonomous experiment loop (local DeepSeek-V4-Flash Q3)
+# Autonomous experiment loop — Deotte / BirdCLEF-style factory
 
-Token-cheap overnight loop for **playground-series-s6e9**.
+Local **DeepSeek-V4-Flash Q3** + Qwen Code. **Files are memory** (fresh agent context each iter).
 
-- **Brain:** `DeepSeek-V4-Flash-0731` **UD-Q3_K_M** (~128 GB) via **llama-server**
-- **Harness:** Qwen Code CLI (`qwen`) → OpenAI API at `http://127.0.0.1:8080/v1`
-- **Orchestrator:** `scripts/autoloop.py` (CV gate, git, optional Kaggle submit)
-- **No Cursor tokens** on the hot path
+Inspired by medal loops (Lin-Chieh Huang BirdCLEF, Chris Deotte playground, etc.):
+score-gated copy → one change → train → keep/kill — not “chat until gold.”
 
-> We dropped `deepseek-r1:70b` (Ollama) in favor of V4-Flash Q3.
+## Layout
 
-## One-time setup
+```
+STRATEGY.md          # human queue + forbidden (leak rules)
+LEARNINGS.md         # append-only failures
+reports/index.md     # id | idea | CV | LB | keep/kill
+exps/
+  exp0000/           # accepted floor (Deotte blend)
+    config.json
+    NOTES.md
+    metrics.json
+  exp0001/           # copy + one diff
+scripts/
+  run_exp.py         # config → train → metrics.json (prints cv_score=...)
+  autoloop.py        # outer factory
+```
+
+## Cycle (orchestrator)
+
+1. Copy last **keep** exp → `expNNNN+1`
+2. Write short `outputs/RUN_BRIEF.md` (STRATEGY + LEARNINGS + index)
+3. Agent edits **only** the new exp (one hypothesis)
+4. `python scripts/run_exp.py expNNNN+1` → `metrics.json`
+5. **Keep** iff `cv_mean >= best + ε` → commit/push; optional Kaggle submit  
+   else **kill** → LEARNINGS + index row; reset tree to last accept
+6. Repeat
+
+## Run
 
 ```bash
-cd ~/Documents/code_projects/ev-purchase-kaggle
+# terminal A
+bash scripts/serve_v4_flash_q3.sh   # ctx 65k
+
+# terminal B
 source .venv/bin/activate
-
-# data
-python -m ev_s6e9 download
-
-# ~128GB Unsloth Q3 GGUF (also: bash scripts/download_v4_flash_q3.sh)
-hf download unsloth/DeepSeek-V4-Flash-0731-GGUF \
-  --include 'UD-Q3_K_M/*' \
-  --local-dir ~/Models/deepseek-v4-flash-q3
-
-# llama.cpp (Metal) + Qwen provider entry
-brew install llama.cpp   # already has deepseek4 arch in 0.4.0+
-bash scripts/setup_loop_model.sh deepseek-v4-flash-q3 http://127.0.0.1:8080/v1
+python scripts/autoloop.py --dry-run          # copy + brief only
+python scripts/autoloop.py --max-iters 20 --submit --push
 ```
 
-## Run (two terminals)
-
+Qwen fallback:
 ```bash
-# A — serve model (alias deepseek-v4-flash-q3)
-bash scripts/serve_v4_flash_q3.sh
-
-# B — overnight loop
-python scripts/autoloop.py \
-  --model deepseek-v4-flash-q3 \
-  --base-url http://127.0.0.1:8080/v1 \
-  --max-iters 30 \
-  --min-delta 0.0001 \
-  --submit \
-  --push \
-  --on-reject reset \
-  --stop-after-no-improve 8 \
-  --target-cv 0.94672
+python scripts/autoloop.py --model qwen3.8:27b-q4_K_M \
+  --base-url http://127.0.0.1:11434/v1 --max-iters 5 --push
 ```
 
-**While Q3 is still downloading**, use local Qwen 27B:
+## Standing rules
 
-```bash
-python scripts/autoloop.py \
-  --model qwen3.8:27b-q4_K_M \
-  --base-url http://127.0.0.1:11434/v1 \
-  --max-iters 5 --push
-```
+| Rule | |
+|------|--|
+| One change per iteration | yes |
+| Do not edit metric / fold protocol | yes (unless STRATEGY says) |
+| Failures → LEARNINGS.md | yes |
+| Human owns STRATEGY + CV design | yes |
+| Agent owns implement in new exp folder | yes |
+| State on disk not chat | yes |
 
-Work happens on branch **`loop/auto`**. Accepts get commits like:
+## Human knobs
 
-`loop: ACCEPT <title> CV=0.94xxx +submit`
+- Edit **`STRATEGY.md`** queue (check off ideas; add forbidden)
+- Set `"stop": "1"` in `outputs/loop_state.json` to halt
+- Pause: kill autoloop; leave llama-server if you want
 
-### Flags that matter
+## Logs
 
-| Flag | Meaning |
-|------|---------|
-| `--submit` | Kaggle submit **only** when CV ≥ best + `--min-delta` |
-| `--push` | `git push -u origin loop/auto` after accepts |
-| `--on-reject reset` | `git reset --hard` to last accept (default) |
-| `--on-reject keep` | commit failed attempts for forensics |
-| `--no-agent` | skip coder; train from existing `outputs/next_experiment.json` |
-| `--dry-run` | write `outputs/RUN_BRIEF.md` only |
-
-State: `outputs/loop_state.json`.
-
-## Agent contract
-
-Orchestrator writes `outputs/RUN_BRIEF.md`. Coding agent must implement **one** hypothesis and write:
-
-```json
-{
-  "title": "seed-avg-deotte",
-  "hypothesis": "Average 3 seeds of deotte blend",
-  "strategy": "deotte",
-  "train_args": ["--strategy", "deotte", "--note", "seed avg attempt"],
-  "predict_args": ["--strategy", "deotte"],
-  "submit_message": "deotte multi-seed"
-}
-```
-
-Rules: `prompts/loop_agent.md`, `CURSOR.md`, `QWEN.md`.
-
-## Gate policy
-
-1. Optimize local CV (`outputs/cv.json` → `mean`)
-2. Submit only if `new_cv >= best_cv + min_delta`
-3. Commit on accept; push if `--push`
-4. Reject → reset to last accept SHA (default)
-5. Never force-push `main`
-
-## Paths
-
-| What | Where |
-|------|--------|
-| GGUF | `~/Models/deepseek-v4-flash-q3/UD-Q3_K_M/` |
-| Server | `scripts/serve_v4_flash_q3.sh` → `:8080` |
-| Download | `scripts/download_v4_flash_q3.sh` |
-| Agent logs | `logs/loop/agent_*.log` |
-
-## Safety
-
-- `data/raw/*` gitignored
-- Daily Kaggle submit caps still apply (at most one submit per **accepted** CV PB)
-- Stop with Ctrl-C; state file keeps best CV for resume
+- `logs/loop/autoloop_stdout.log`
+- `logs/loop/agent_*.log`
+- `reports/index.md`

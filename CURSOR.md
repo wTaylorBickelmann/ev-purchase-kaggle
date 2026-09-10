@@ -15,10 +15,18 @@ Conventions for this repo (and for any agent working in it).
 - **Feature engineering** and **modeling** each get their **own classes** (not only free functions dumped in a script). Put reusable transforms / model wrappers behind those class APIs so train, predict, notebooks, and site builds share one path.
 - Other concerns (data I/O, CV, submit, experiments log, site build) stay in small modules that call those classes.
 
-## Experiments
+## Experiments (autonomous loop)
 
-- Append-only `EXPERIMENTS.md`: one terse chunk per attempt.
-- After a Kaggle submit scores, the chunk for that attempt must include the public **LB** score (poll submissions if needed). Use `LB: —` only while scoring is still pending.
+Deotte/BirdCLEF-style factory — **files are memory**:
+
+- `STRATEGY.md` — human idea queue + leak rules  
+- `LEARNINGS.md` — append-only failures  
+- `reports/index.md` — keep/kill table  
+- `exps/expNNNN/` — copy last keep → one change → `scripts/run_exp.py`  
+
+Also append-only `EXPERIMENTS.md` from the train CLI. Do not rewrite old rows.
+
+See `LOOP.md`.
 
 ## Do not
 

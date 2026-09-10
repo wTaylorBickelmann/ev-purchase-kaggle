@@ -1,0 +1,9 @@
+{
+  "id": "exp0000",
+  "cv_mean": 0.9420969128979071,
+  "cv_std": 0.0007478512448736998,
+  "cv": "0.94210 ± 0.00075",
+  "lb": "0.94182",
+  "status": "keep",
+  "source": "prior full-data train + Kaggle submit"
+}

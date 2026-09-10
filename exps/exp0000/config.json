@@ -1,0 +1,17 @@
+{
+  "id": "exp0000",
+  "title": "deotte-baseline",
+  "hypothesis": "Chris Deotte Fable 5.1 three-model XGB blend is the accepted floor",
+  "parent": null,
+  "strategy": "deotte",
+  "train_args": ["--strategy", "deotte", "--note", "exp0000 baseline floor"],
+  "predict_args": ["--strategy", "deotte"],
+  "submit_message": "exp0000 deotte blend",
+  "folds": 5,
+  "seed": 42,
+  "status": "keep",
+  "cv_mean": 0.9420969128979071,
+  "cv_std": 0.0007478512448736998,
+  "cv": "0.94210 ± 0.00075",
+  "lb": "0.94182"
+}

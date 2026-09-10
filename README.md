@@ -73,15 +73,13 @@ python -m ev_s6e9 predict --strategy deotte   # or auto-detect from outputs/cv.j
 
 ## Autonomous local loop (no Cursor tokens)
 
-Overnight CV-gated experiment loop using **DeepSeek-V4-Flash-0731 Q3** via **llama-server** + Qwen Code CLI. Submits to Kaggle only when local CV beats the prior best.
-
-See **`LOOP.md`**. Quick start:
+Deotte/BirdCLEF-style **exp factory**: copy `exps/expNNNN` → one change → CV gate → keep/kill.
+Brain: DeepSeek-V4-Flash Q3 via llama-server + Qwen Code. See **`LOOP.md`**, **`STRATEGY.md`**.
 
 ```bash
-bash scripts/download_v4_flash_q3.sh          # ~128GB once
-bash scripts/setup_loop_model.sh
-bash scripts/serve_v4_flash_q3.sh             # terminal A
-python scripts/autoloop.py --submit --push    # terminal B
+bash scripts/serve_v4_flash_q3.sh
+python scripts/autoloop.py --dry-run
+python scripts/autoloop.py --max-iters 20 --submit --push
 ```
 
 No credentials? Schema-accurate fake CSVs (not for LB):

@@ -1,44 +1,26 @@
-# Loop coding agent
+# Loop coding agent (exp factory)
 
-You implement **one** Kaggle experiment per invocation for `playground-series-s6e9`.
+You implement **one** change per invocation inside a single new `exps/expNNNN/` folder.
 
 ## Mission
 
-Beat **current best local CV** (see `outputs/RUN_BRIEF.md`). Orchestrator trains, gates, and may submit.
+Read `outputs/RUN_BRIEF.md` (task card). Beat **current best CV** with exactly one hypothesis.
 
 ## Do
 
-1. Read `outputs/RUN_BRIEF.md`, `CURSOR.md`, `STRATEGIES.md`, `EXPERIMENTS.md` (tail), `TOP20_PUBLIC_NOTEBOOKS.md`.
-2. Pick **one** hypothesis with a shot at real lift (features / recipe / seeds / blend / stack / notebook idea).
-3. Implement cleanly behind a strategy flag or focused param change.
-4. Update `STRATEGIES.md` if you add a strategy.
-5. Run cheap checks: `pytest`, optional `python -m ev_s6e9 train --synth --strategy …`.
-6. Write `outputs/next_experiment.json` and **stop**.
+1. Read BRIEF → `STRATEGY.md` queue → `LEARNINGS.md` → `reports/index.md` → parent exp NOTES/config.
+2. Pick the highest-priority **unchecked** STRATEGY item not already killed for the same idea.
+3. Edit **`exps/expNNNN/config.json`** + **`NOTES.md`** (and minimal shared lib only if required).
+4. One change only. Stop. Orchestrator runs `python scripts/run_exp.py expNNNN`.
 
 ## Do not
 
-- Run full real-data train (orchestrator does that) unless asked
-- Call Kaggle submit
-- Burn time on tiny hyperparam jitter when structural ideas remain
-- Rewrite old `EXPERIMENTS.md` entries
-- Commit secrets or competition CSVs
-- Force-push / switch off the loop branch
+- Train full real data / Kaggle submit
+- Edit other keep exps or rewrite index history
+- Change metric or fold split unless STRATEGY allows
+- Retry ideas already in LEARNINGS without a new angle
+- Multi-unrelated rewrites
 
-## next_experiment.json
+## config.json
 
-```json
-{
-  "title": "short-slug",
-  "hypothesis": "one sentence",
-  "strategy": "deotte",
-  "train_args": ["--strategy", "deotte", "--note", "takeaway"],
-  "predict_args": ["--strategy", "deotte"],
-  "submit_message": "message if submitted"
-}
-```
-
-## Architecture reminders
-
-- Feature engineering and models: **classes** in `src/ev_s6e9/`
-- CLI stays thin: `python -m ev_s6e9 train|predict|submit`
-- Train must write `outputs/cv.json` with numeric `"mean"` (existing paths already do)
+Must include `id`, `title`, `hypothesis`, `parent`, `strategy` or `train_args`, `status: wip`.
