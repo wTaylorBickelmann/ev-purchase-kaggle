@@ -222,63 +222,66 @@ def copy_exp(src_id: str, dst_id: str) -> Path:
     return dst
 
 
-def write_brief(state: State, new_exp: str, parent: str) -> Path:
-    OUT.mkdir(parents=True, exist_ok=True)
-    index_tail = INDEX.read_text(encoding="utf-8") if INDEX.exists() else ""
-    strategy = STRATEGY.read_text(encoding="utf-8") if STRATEGY.exists() else ""
-    learnings = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else ""
-    # keep brief compact: full STRATEGY is needed but LEARNINGS/index already short
-    if len(learnings) > 4000:
-        learnings = learnings[:4000] + "\n…\n"
-    brief = f"""# RUN BRIEF — {new_exp} (parent {parent})
+def _tail_lines(path: Path, n: int) -> str:
+    if not path.exists():
+        return "(missing)"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) <= n:
+        return "\n".join(lines)
+    return "\n".join(lines[-n:])
 
-Score-gated experiment factory (Deotte / BirdCLEF-style). **Fresh context — files are memory.**
+
+def write_brief(state: State, new_exp: str, parent: str) -> Path:
+    """Compact task card — agent must open STRATEGY/LEARNINGS/index on disk."""
+    OUT.mkdir(parents=True, exist_ok=True)
+    index_tail = _tail_lines(INDEX, 12)
+    learnings_tail = _tail_lines(LEARNINGS, 15)
+    # queue excerpt only (not full STRATEGY)
+    strategy_q = ""
+    if STRATEGY.exists():
+        body = STRATEGY.read_text(encoding="utf-8")
+        if "## Queue" in body:
+            strategy_q = body.split("## Queue", 1)[1]
+            strategy_q = "## Queue" + strategy_q.split("## Stop", 1)[0]
+        strategy_q = strategy_q[:1800]
+    parent_cfg = ""
+    pcfg = EXPS / parent / "config.json"
+    if pcfg.exists():
+        parent_cfg = pcfg.read_text(encoding="utf-8")[:1200]
+    brief = f"""# RUN BRIEF — {new_exp} ← parent {parent}
+
+Brain: **DeepSeek-V4-Flash-Q3** via llama-server. Files are memory.
 
 ## Mission
-One change only in `{EXPS / new_exp}/` so local CV can beat **{state.best_cv_str}** (gate `{state.best_cv:.8f}`).
+One change in `exps/{new_exp}/` to beat CV **{state.best_cv_str}** (gate {state.best_cv:.8f}).
 
-## You may edit
-- `{EXPS / new_exp}/config.json`  (train_args, strategy, folds, seed, title, hypothesis)
-- `{EXPS / new_exp}/NOTES.md`
-- Shared `src/ev_s6e9/**` **only if** config needs a new capability — keep the diff minimal and document in NOTES
+## Edit only
+- `exps/{new_exp}/config.json`
+- `exps/{new_exp}/NOTES.md`
+- `src/ev_s6e9/**` only if a new flag/capability is required (minimal)
 
-## You must NOT
-- Edit other `exps/*` keep folders
-- Change metric or fold protocol unless STRATEGY says so
-- Run full real-data train (orchestrator runs `python scripts/run_exp.py {new_exp}`)
-- Kaggle submit
-- Rewrite `reports/index.md` old rows (orchestrator appends)
+## Do not
+- Train full data / Kaggle submit / edit other keep exps / change folds/metric
+- Orchestrator runs: `python scripts/run_exp.py {new_exp}`
 
-## config.json shape
-```json
-{{
-  "id": "{new_exp}",
-  "title": "short-slug",
-  "hypothesis": "one sentence — the single change",
-  "parent": "{parent}",
-  "strategy": "deotte",
-  "train_args": ["--strategy", "deotte", "--note", "{new_exp}: ..."],
-  "predict_args": ["--strategy", "deotte"],
-  "submit_message": "{new_exp}",
-  "folds": 5,
-  "seed": 42,
-  "status": "wip"
-}}
-```
+## config.json must set
+id, title, hypothesis (ONE change), parent, strategy or train_args, folds=5, seed, status=wip
 
-## STRATEGY.md
-{strategy}
+## STRATEGY queue (read full STRATEGY.md on disk)
+{strategy_q or "(see STRATEGY.md)"}
 
-## LEARNINGS.md
-{learnings}
+## LEARNINGS (tail)
+{learnings_tail}
 
-## reports/index.md
+## reports/index.md (tail)
 {index_tail}
 
-## Parent exp
-Read `{EXPS / parent}/NOTES.md` and `{EXPS / parent}/config.json`.
+## Parent config
+```json
+{parent_cfg}
+```
 
-When the one change is implemented, **stop**. Orchestrator trains and gates.
+Also read `exps/{parent}/NOTES.md`. Then implement the single change and **stop**.
 """
     BRIEF_PATH.write_text(brief, encoding="utf-8")
     return BRIEF_PATH
@@ -312,11 +315,16 @@ def model_ready(model: str, base_url: str) -> tuple[bool, str]:
 
 
 def run_agent(model: str, agent_bin: str, timeout: int, base_url: str, new_exp: str) -> None:
+    """Drive coding agent against local DeepSeek (OpenAI-compatible llama-server).
+
+    Uses Qwen Code CLI as the *harness* only; model id + base_url must be DeepSeek.
+    --safe-mode skips auto-injected project context that blew past ctx limits.
+    """
     prompt = (
-        f"Read {BRIEF_PATH} only as the task card. "
-        f"Implement ONE change for {new_exp}. "
-        f"Edit primarily {EXPS / new_exp}/. "
-        "Do not train full data. Do not submit. Stop when config+NOTES reflect the single change."
+        f"You are coding against DeepSeek-V4-Flash via local llama-server.\n"
+        f"Read outputs/RUN_BRIEF.md then STRATEGY.md LEARNINGS.md reports/index.md "
+        f"and exps parent notes. Implement ONE change for {new_exp} in exps/{new_exp}/ only. "
+        f"Do not train full data. Do not submit. Stop when config.json + NOTES.md are done."
     )
     env = os.environ.copy()
     env.update(
@@ -327,14 +335,27 @@ def run_agent(model: str, agent_bin: str, timeout: int, base_url: str, new_exp: 
             "OPENAI_MODEL": model,
             "EV_S6E9_ROOT": str(ROOT),
             "QWEN_CODE_SUPPRESS_YOLO_WARNING": "1",
+            # pin model for any nested tool that reads env
+            "QWEN_MODEL": model,
         }
     )
-    cmd = [agent_bin, "-m", model, "--output-format", "text", prompt]
+    # -p non-interactive; --safe-mode = no huge repo context dumps; fresh session (no -c)
+    cmd = [
+        agent_bin,
+        "--safe-mode",
+        "-m",
+        model,
+        "-o",
+        "text",
+        "-p",
+        prompt,
+    ]
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"agent_{int(time.time())}.log"
     print(f"agent log → {log_path}", flush=True)
+    print(f"agent model={model} base_url={base_url} (DeepSeek path)", flush=True)
     with log_path.open("w", encoding="utf-8") as log:
-        log.write(f"cmd: {' '.join(cmd)}\nbase_url={base_url}\n\n")
+        log.write(f"cmd: {' '.join(cmd)}\nmodel={model}\nbase_url={base_url}\n\n")
         log.flush()
         p = subprocess.Popen(
             cmd, cwd=str(ROOT), env=env, stdout=log, stderr=subprocess.STDOUT, text=True
