@@ -2,14 +2,16 @@
 
 Append-only running log for playground-series-s6e9. **Newest entries at the bottom.**
 
-Append a chunk after every attempt (or let `python -m ev_s6e9 train` do it). Keep it terse. Do not edit old entries.
+Append a chunk after every attempt (or let `python -m ev_s6e9 train` / submit helpers do it). Keep it terse. Do not edit old entries.
+
+**Rule:** once Kaggle returns a public score for that attempt, the chunk must include it under `LB:` (poll `kaggle competitions submissions` after submit if needed). Leave `LB: —` only while scoring is still pending.
 
 Template:
 
 ```
 ### YYYY-MM-DD — <model / features / key params>
 - CV: <mean AUC ± std>
-- LB: <score or —>
+- LB: <public score or — while pending>
 - Takeaway: <one line>
 ```
 
