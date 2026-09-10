@@ -1,6 +1,15 @@
 # Top-20 public notebooks (S6E9)
 
-Research notes for [playground-series-s6e9](https://www.kaggle.com/competitions/playground-series-s6e9) (*Predicting Electric Vehicle Purchases*).  
+Research notes for [playground-series-s6e9](https://www.kaggle.com/competitions/playground-series-s6e9) (*Predicting Electric Vehicle Purchases*).
+
+## Review log
+
+Append a line each time we re-check what the top 20 are doing (public LB + public notebooks).
+
+| Date | Notes |
+|------|--------|
+| 2026-09-09 | First pass: public LB top 20 snapshot (≈0.9467 ceiling); public kernels found for Deotte, Ravi, cstdy; rest mostly private. |
+
 Pulled from the public leaderboard (~2026-09-09) and any **public** competition notebooks tied to those teams. Top public LB then ≈ **0.9467**.
 
 Most of the top 20 have **no** public S6E9 notebook. The ones that do are summarized below. Near-top community kernels that mirror the same ideas are noted at the end.
@@ -49,6 +58,8 @@ Approach:
   3. recipe score as an **extra feature**
 - Equal-weight blends the three OOF/test preds.
 - Emphasis: use the generative recipe + small diversity, not a huge stack.
+
+**In this repo:** implemented as `--strategy deotte` (see `STRATEGIES.md`, `src/ev_s6e9/deotte.py`).
 
 ### 15. Ravi Ramakrishnan (0.94647)
 

@@ -6,6 +6,7 @@ import pandas as pd
 
 import ev_s6e9
 from ev_s6e9.data import synth
+from ev_s6e9.deotte import train as train_deotte
 from ev_s6e9.predict import predict
 from ev_s6e9.schema import SUB_COLS, TRAIN_COLS
 from ev_s6e9.train import train
@@ -53,6 +54,31 @@ def test_train_predict_smoke(tmp_path):
     assert "LightGBM" in log.read_text()
     assert "0." in log.read_text()
     sub = predict(te, models_dir=out / "models", path=tmp_path / "submission.csv")
+    df = pd.read_csv(sub)
+    assert list(df.columns) == SUB_COLS
+    assert len(df) == 20
+    assert df["Will_Buy_EV"].between(0, 1).all()
+
+
+def test_deotte_train_predict_smoke(tmp_path):
+    tr = synth(120, seed=0, target=True)
+    te = synth(20, seed=1, target=False, start_id=10_000)
+    log = tmp_path / "EXPERIMENTS.md"
+    out = tmp_path / "outputs"
+    cv = train_deotte(
+        tr,
+        te,
+        folds=2,
+        seed=0,
+        log=True,
+        note="deotte smoke",
+        experiments_path=log,
+        out=out,
+        model_overrides={"n_estimators": 20, "early_stopping_rounds": 5},
+    )
+    assert 0.5 <= cv.mean <= 1.0
+    assert "Deotte" in log.read_text()
+    sub = predict(te, strategy="deotte", out=out, path=tmp_path / "submission.csv")
     df = pd.read_csv(sub)
     assert list(df.columns) == SUB_COLS
     assert len(df) == 20

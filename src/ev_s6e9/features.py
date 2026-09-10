@@ -1,10 +1,15 @@
-"""Tiny feature builders."""
+"""Feature builders: LightGBM baseline + Deotte FeatureBuilder."""
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 from ev_s6e9.schema import CAT_COLS, FEATURE_COLS, ID_COL, NUM_COLS, TARGET, check_cols
+
+HELPER_COLS = ["worry_score", "chargers_total", "income_x_subsidy", "concern_x_subsidy"]
+RECIPE_COL = "recipe_score"
 
 
 def encode_target(s: pd.Series) -> pd.Series:
@@ -39,3 +44,83 @@ def prep_x(df: pd.DataFrame) -> pd.DataFrame:
 
 def split_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     return prep_x(df), encode_target(df[TARGET])
+
+
+def _yes(s: pd.Series) -> pd.Series:
+    return s.astype(str).str.strip().str.lower().eq("yes").astype(float)
+
+
+class FeatureBuilder:
+    """Deotte Fable 5.1: helper features, recipe score/logit, category codes."""
+
+    def __init__(self) -> None:
+        self._cat_dtypes: dict[str, pd.CategoricalDtype] = {}
+        self._fitted = False
+
+    def fit(self, train: pd.DataFrame, test: pd.DataFrame | None = None) -> FeatureBuilder:
+        frames = [train]
+        if test is not None:
+            frames.append(test)
+        combined = pd.concat(frames, ignore_index=True)
+        for c in CAT_COLS:
+            cats = combined[c].astype("string").dropna().unique()
+            self._cat_dtypes[c] = pd.CategoricalDtype(categories=sorted(cats))
+        self._fitted = True
+        return self
+
+    def _require_fit(self) -> None:
+        if not self._fitted:
+            raise RuntimeError("FeatureBuilder.fit() required before transform")
+
+    @staticmethod
+    def recipe_score(df: pd.DataFrame) -> pd.Series:
+        income = pd.to_numeric(df["Annual_Income_USD"], errors="coerce") / 1e5
+        concern = pd.to_numeric(df["Environmental_Concern_Level"], errors="coerce")
+        subsidy = _yes(df["Subsidy_Available"])
+        anxiety = df["Range_Anxiety_Level"].astype(str)
+        return (
+            1.2 * income
+            + 0.6 * concern
+            + 2.0 * subsidy
+            - 1.0 * anxiety.eq("Medium").astype(float)
+            - 3.0 * anxiety.eq("High").astype(float)
+        )
+
+    @staticmethod
+    def recipe_logit(df: pd.DataFrame) -> np.ndarray:
+        score = FeatureBuilder.recipe_score(df).to_numpy(dtype=float)
+        p = np.clip(norm.cdf(score - 5.5), 1e-6, 1 - 1e-6)
+        return np.log(p / (1 - p))
+
+    def _helper_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+        commute = pd.to_numeric(df["Daily_Commute_km"], errors="coerce")
+        home = pd.to_numeric(df["Charging_Stations_Near_Home"], errors="coerce")
+        work = pd.to_numeric(df["Charging_Stations_Near_Work"], errors="coerce")
+        income = pd.to_numeric(df["Annual_Income_USD"], errors="coerce") / 1e5
+        concern = pd.to_numeric(df["Environmental_Concern_Level"], errors="coerce")
+        subsidy = _yes(df["Subsidy_Available"])
+        home_chg = _yes(df["Home_Charging_Possible"])
+        return pd.DataFrame(
+            {
+                "worry_score": commute - 5 * home - 5 * work - 150 * home_chg,
+                "chargers_total": home + work,
+                "income_x_subsidy": income * subsidy,
+                "concern_x_subsidy": concern * subsidy,
+            },
+            index=df.index,
+        )
+
+    def transform(self, df: pd.DataFrame, *, with_recipe: bool = False) -> pd.DataFrame:
+        self._require_fit()
+        check_cols(df.columns, FEATURE_COLS, "features")
+        helpers = self._helper_frame(df)
+        x = df[FEATURE_COLS].copy()
+        for c in NUM_COLS:
+            x[c] = pd.to_numeric(x[c], errors="coerce")
+        for c in CAT_COLS:
+            x[c] = df[c].astype("string").astype(self._cat_dtypes[c]).cat.codes.astype(np.int16)
+        for c in HELPER_COLS:
+            x[c] = helpers[c]
+        if with_recipe:
+            x[RECIPE_COL] = self.recipe_score(df)
+        return x

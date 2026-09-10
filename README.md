@@ -62,13 +62,34 @@ python -m ev_s6e9 predict
 python -m ev_s6e9 submit -m "lgbm 5-fold baseline"
 ```
 
+Train strategies (LightGBM baseline + Chris Deotte Fable 5.1 XGB blend) are listed in **`STRATEGIES.md`**.
+
+```bash
+python -m ev_s6e9 train --strategy deotte
+python -m ev_s6e9 predict --strategy deotte   # or auto-detect from outputs/cv.json
+```
+
 `train` appends `EXPERIMENTS.md` (`--no-log` to skip). Do not rewrite old chunks.
+
+## Autonomous local loop (no Cursor tokens)
+
+Overnight CV-gated experiment loop using **Ollama + Qwen Code CLI** (default model `deepseek-r1:70b`). Submits to Kaggle only when local CV beats the prior best.
+
+See **`LOOP.md`**. Quick start:
+
+```bash
+ollama pull deepseek-r1:70b
+bash scripts/setup_loop_model.sh
+python scripts/autoloop.py --dry-run
+python scripts/autoloop.py --max-iters 20 --submit --push
+```
 
 No credentials? Schema-accurate fake CSVs (not for LB):
 
 ```bash
 python -m ev_s6e9 download --synth
 python -m ev_s6e9 train --synth
+python -m ev_s6e9 train --synth --strategy deotte
 python -m ev_s6e9 predict
 python -m ev_s6e9 build_site --sample
 ```
@@ -78,8 +99,9 @@ python -m ev_s6e9 build_site --sample
 ```
 notebooks/           local marimo (thin; call the library)
 notebooks/public/    small CSVs for sample EDA when data/raw is absent
-src/ev_s6e9/         data, features, model, train, predict, submit, viz, site, …
+src/ev_s6e9/         data, features, model, deotte, train, predict, submit, viz, site, …
 _site/               generated static gallery (gitignored)
+STRATEGIES.md        train strategies (lgbm, deotte, …)
 EXPERIMENTS.md       append-only CV / LB log
 ```
 

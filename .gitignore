@@ -30,3 +30,5 @@ _site/
 notebooks/public/ev_s6e9/
 __marimo__/
 .marimo/
+logs/loop/
+.qwen/

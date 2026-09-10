@@ -17,6 +17,7 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument("--synth", action="store_true", help="write schema-accurate fake CSVs instead")
 
     t = sub.add_parser("train", help="stratified CV + save OOF/models + append EXPERIMENTS.md")
+    t.add_argument("--strategy", choices=["lgbm", "deotte"], default="lgbm")
     t.add_argument("--folds", type=int, default=5)
     t.add_argument("--seed", type=int, default=42)
     t.add_argument("--n-estimators", type=int, default=None)
@@ -24,7 +25,8 @@ def _parser() -> argparse.ArgumentParser:
     t.add_argument("--no-log", action="store_true", help="do not append EXPERIMENTS.md")
     t.add_argument("--synth", action="store_true", help="train on tiny synthetic data (no kaggle files)")
 
-    sub.add_parser("predict", help="average fold models → outputs/submission.csv")
+    pr = sub.add_parser("predict", help="average fold models → outputs/submission.csv")
+    pr.add_argument("--strategy", choices=["lgbm", "deotte"], default=None)
 
     s = sub.add_parser("submit", help="kaggle competitions submit")
     s.add_argument("-m", "--message", default="lgbm baseline")
@@ -69,7 +71,6 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd == "train":
-        from ev_s6e9.train import train
         from ev_s6e9.viz import eda
 
         df = _need_train_csv(args.synth)
@@ -78,15 +79,34 @@ def main(argv: list[str] | None = None) -> None:
             ov["n_estimators"] = args.n_estimators
         if args.synth:
             ov.setdefault("n_estimators", 40)
-        train(
-            df,
-            folds=args.folds,
-            seed=args.seed,
-            log=not args.no_log and not args.synth,
-            note=args.note,
-            experiments_path=EXPERIMENTS_MD,
-            model_overrides=ov or None,
-        )
+        if args.strategy == "deotte":
+            from ev_s6e9.data import load_test
+            from ev_s6e9.deotte import train as train_deotte
+            from ev_s6e9.paths import TEST_CSV
+
+            test_df = load_test() if TEST_CSV.exists() else None
+            train_deotte(
+                df,
+                test_df,
+                folds=args.folds,
+                seed=args.seed,
+                log=not args.no_log and not args.synth,
+                note=args.note,
+                experiments_path=EXPERIMENTS_MD,
+                model_overrides=ov or None,
+            )
+        else:
+            from ev_s6e9.train import train
+
+            train(
+                df,
+                folds=args.folds,
+                seed=args.seed,
+                log=not args.no_log and not args.synth,
+                note=args.note,
+                experiments_path=EXPERIMENTS_MD,
+                model_overrides=ov or None,
+            )
         eda(df)
         return
 
@@ -97,7 +117,7 @@ def main(argv: list[str] | None = None) -> None:
 
         if not TEST_CSV.exists():
             sys.exit(f"missing {TEST_CSV}; run download (or download --synth)")
-        predict(load_test())
+        predict(load_test(), strategy=args.strategy)
         return
 
     if args.cmd == "submit":
