@@ -1,10 +1,13 @@
-# Autonomous experiment loop (local DeepSeek)
+# Autonomous experiment loop (local DeepSeek-V4-Flash Q3)
 
 Token-cheap overnight loop for **playground-series-s6e9**.
 
-- **Brain:** Ollama model (default `deepseek-r1:70b`) via **Qwen Code CLI** (`qwen`)
+- **Brain:** `DeepSeek-V4-Flash-0731` **UD-Q3_K_M** (~128 GB) via **llama-server**
+- **Harness:** Qwen Code CLI (`qwen`) → OpenAI API at `http://127.0.0.1:8080/v1`
 - **Orchestrator:** `scripts/autoloop.py` (CV gate, git, optional Kaggle submit)
 - **No Cursor tokens** on the hot path
+
+> We dropped `deepseek-r1:70b` (Ollama) in favor of V4-Flash Q3.
 
 ## One-time setup
 
@@ -15,24 +18,26 @@ source .venv/bin/activate
 # data
 python -m ev_s6e9 download
 
-# model (~42GB). M3 Ultra 512GB can go larger later; 70B is the practical coding default.
-ollama pull deepseek-r1:70b
+# ~128GB Unsloth Q3 GGUF (also: bash scripts/download_v4_flash_q3.sh)
+hf download unsloth/DeepSeek-V4-Flash-0731-GGUF \
+  --include 'UD-Q3_K_M/*' \
+  --local-dir ~/Models/deepseek-v4-flash-q3
 
-# optional: register model in Qwen settings (also done by scripts/setup_loop_model.sh)
-bash scripts/setup_loop_model.sh
+# llama.cpp (Metal) + Qwen provider entry
+brew install llama.cpp   # already has deepseek4 arch in 0.4.0+
+bash scripts/setup_loop_model.sh deepseek-v4-flash-q3 http://127.0.0.1:8080/v1
 ```
 
-Qwen is already on PATH (`~/.local/bin/qwen`) and uses Ollama at `http://127.0.0.1:11434/v1` with `approvalMode: yolo`.
-
-## Run
+## Run (two terminals)
 
 ```bash
-# sanity: write brief only
-python scripts/autoloop.py --dry-run
+# A — serve model (alias deepseek-v4-flash-q3)
+bash scripts/serve_v4_flash_q3.sh
 
-# overnight (submit only on CV personal best; push commits to origin)
+# B — overnight loop
 python scripts/autoloop.py \
-  --model deepseek-r1:70b \
+  --model deepseek-v4-flash-q3 \
+  --base-url http://127.0.0.1:8080/v1 \
   --max-iters 30 \
   --min-delta 0.0001 \
   --submit \
@@ -40,12 +45,18 @@ python scripts/autoloop.py \
   --on-reject reset \
   --stop-after-no-improve 8 \
   --target-cv 0.94672
-
-# while DeepSeek is still downloading, use Qwen 27B:
-python scripts/autoloop.py --model qwen3.8:27b-q4_K_M --max-iters 5 --push
 ```
 
-Work happens on branch **`loop/auto`** (created if missing). Accepts get commits like:
+**While Q3 is still downloading**, use local Qwen 27B:
+
+```bash
+python scripts/autoloop.py \
+  --model qwen3.8:27b-q4_K_M \
+  --base-url http://127.0.0.1:11434/v1 \
+  --max-iters 5 --push
+```
+
+Work happens on branch **`loop/auto`**. Accepts get commits like:
 
 `loop: ACCEPT <title> CV=0.94xxx +submit`
 
@@ -54,20 +65,17 @@ Work happens on branch **`loop/auto`** (created if missing). Accepts get commits
 | Flag | Meaning |
 |------|---------|
 | `--submit` | Kaggle submit **only** when CV ≥ best + `--min-delta` |
-| `--push` | `git push -u origin loop/auto` after accepts (and keep-rejects) |
-| `--on-reject reset` | `git reset --hard` to last accept (default; recommended for local models) |
+| `--push` | `git push -u origin loop/auto` after accepts |
+| `--on-reject reset` | `git reset --hard` to last accept (default) |
 | `--on-reject keep` | commit failed attempts for forensics |
-| `--no-agent` | skip coder; run train from existing `outputs/next_experiment.json` |
+| `--no-agent` | skip coder; train from existing `outputs/next_experiment.json` |
 | `--dry-run` | write `outputs/RUN_BRIEF.md` only |
 
-State: `outputs/loop_state.json` (best CV, accept SHA, counters).
+State: `outputs/loop_state.json`.
 
 ## Agent contract
 
-Each iteration the orchestrator writes `outputs/RUN_BRIEF.md`. The coding agent must:
-
-1. Implement **one** hypothesis
-2. Write `outputs/next_experiment.json`:
+Orchestrator writes `outputs/RUN_BRIEF.md`. Coding agent must implement **one** hypothesis and write:
 
 ```json
 {
@@ -80,45 +88,27 @@ Each iteration the orchestrator writes `outputs/RUN_BRIEF.md`. The coding agent 
 }
 ```
 
-3. Stop — orchestrator runs `python -m ev_s6e9 train …`, reads `outputs/cv.json`, gates submit
+Rules: `prompts/loop_agent.md`, `CURSOR.md`, `QWEN.md`.
 
-Full agent rules: `prompts/loop_agent.md` (also inlined into the brief).
+## Gate policy
 
-## Gate policy (your rules)
-
-1. **Optimize local CV** (`outputs/cv.json` → `mean`) from the real train path
-2. **Submit only** if `new_cv >= best_cv + min_delta` (default +0.0001)
-3. **Commit on progress** (accept always; reject only if `--on-reject keep`)
-4. Agent may thrash the tree; **reset** restores last accept SHA
+1. Optimize local CV (`outputs/cv.json` → `mean`)
+2. Submit only if `new_cv >= best_cv + min_delta`
+3. Commit on accept; push if `--push`
+4. Reject → reset to last accept SHA (default)
 5. Never force-push `main`
 
-## Suggested search order
+## Paths
 
-1. Close gap toward Deotte public ~0.9467 (parity, seeds, blend weights)
-2. Multi-seed + LGBM/XGB/CatBoost stack
-3. Ideas from `TOP20_PUBLIC_NOTEBOOKS.md`
-4. Only then free exploration
-
-## Logs
-
-- `logs/loop/agent_*.log` — coder stdout
-- `logs/loop/last_train.stdout.txt`
-- `outputs/RUN_BRIEF.md` — last brief
-- `outputs/best_cv.json` — last accepted CV snapshot
-
-## Swap models
-
-```bash
-ollama pull deepseek-r1:70b
-# later, larger/coding-specialized tags as you like:
-# ollama pull <other-tag>
-python scripts/autoloop.py --model <tag> ...
-```
-
-Removing `qwen3.8:27b-q4_K_M` does **not** speed DeepSeek; only free disk if you want it back.
+| What | Where |
+|------|--------|
+| GGUF | `~/Models/deepseek-v4-flash-q3/UD-Q3_K_M/` |
+| Server | `scripts/serve_v4_flash_q3.sh` → `:8080` |
+| Download | `scripts/download_v4_flash_q3.sh` |
+| Agent logs | `logs/loop/agent_*.log` |
 
 ## Safety
 
-- `data/raw/*` gitignored — still don’t paste keys into commits
-- Daily Kaggle submit caps still apply; loop submits at most once per **accepted** CV PB
-- Stop the loop with Ctrl-C; state file keeps best CV for resume
+- `data/raw/*` gitignored
+- Daily Kaggle submit caps still apply (at most one submit per **accepted** CV PB)
+- Stop with Ctrl-C; state file keeps best CV for resume

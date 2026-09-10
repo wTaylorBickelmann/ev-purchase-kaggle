@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Autonomous Kaggle experiment loop (local model, CV-gated submit).
 
-Orchestrator only — coding is delegated to Qwen Code CLI → Ollama.
+Orchestrator only — coding is delegated to Qwen Code CLI → local OpenAI-compatible server.
+
+Default brain: DeepSeek-V4-Flash-0731 UD-Q3_K_M via llama-server (see scripts/serve_v4_flash_q3.sh).
+Fallback: Ollama models (e.g. qwen3.8:27b-q4_K_M).
 
 Each iteration:
   1. Write outputs/RUN_BRIEF.md from current best + experiment history
@@ -13,13 +16,16 @@ Each iteration:
 
 Examples:
   python scripts/autoloop.py --dry-run
-  python scripts/autoloop.py --max-iters 1 --no-agent   # train whatever next_experiment.json says
+  python scripts/autoloop.py --max-iters 1 --no-agent
+  # terminal A: bash scripts/serve_v4_flash_q3.sh
+  # terminal B:
   python scripts/autoloop.py --max-iters 20 --submit --push
-  python scripts/autoloop.py --model deepseek-r1:70b --max-iters 50 --submit --push
+  python scripts/autoloop.py --model qwen3.8:27b-q4_K_M --base-url http://127.0.0.1:11434/v1
 
 Env:
-  EV_LOOP_MODEL   default Ollama model tag
-  EV_LOOP_AGENT   agent binary (default: qwen)
+  EV_LOOP_MODEL     default model id (default: deepseek-v4-flash-q3)
+  EV_LOOP_BASE_URL  OpenAI-compatible base (default: http://127.0.0.1:8080/v1)
+  EV_LOOP_AGENT     agent binary (default: qwen)
 """
 from __future__ import annotations
 
@@ -31,6 +37,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,10 +52,12 @@ CV_JSON = OUT / "cv.json"
 EXPERIMENTS = ROOT / "EXPERIMENTS.md"
 LOG_DIR = ROOT / "logs" / "loop"
 VENV_PY = ROOT / ".venv" / "bin" / "python"
-DEFAULT_MODEL = os.environ.get("EV_LOOP_MODEL", "deepseek-r1:70b")
+DEFAULT_MODEL = os.environ.get("EV_LOOP_MODEL", "deepseek-v4-flash-q3")
+DEFAULT_BASE_URL = os.environ.get("EV_LOOP_BASE_URL", "http://127.0.0.1:8080/v1")
 DEFAULT_AGENT = os.environ.get("EV_LOOP_AGENT", "qwen")
 DEFAULT_BEST = 0.94210  # current deotte CV floor if log empty
 BRANCH = "loop/auto"
+V4_Q3_DIR = Path.home() / "Models" / "deepseek-v4-flash-q3" / "UD-Q3_K_M"
 
 # paths we never wipe on reject
 KEEP_ON_CLEAN = {
@@ -291,7 +301,7 @@ def load_next_experiment() -> dict:
     return json.loads(NEXT_PATH.read_text(encoding="utf-8"))
 
 
-def run_agent(model: str, agent_bin: str, timeout: int) -> None:
+def run_agent(model: str, agent_bin: str, timeout: int, base_url: str) -> None:
     prompt = (
         f"Read {BRIEF_PATH} and LOOP.md (if present). "
         "Implement ONE experiment end-to-end in this repo. "
@@ -305,7 +315,7 @@ def run_agent(model: str, agent_bin: str, timeout: int) -> None:
         {
             "OLLAMA_API_KEY": "ollama",
             "OPENAI_API_KEY": "ollama",
-            "OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+            "OPENAI_BASE_URL": base_url.rstrip("/"),
             "OPENAI_MODEL": model,
             "EV_S6E9_ROOT": str(ROOT),
         }
@@ -321,8 +331,9 @@ def run_agent(model: str, agent_bin: str, timeout: int) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"agent_{int(time.time())}.log"
     print(f"agent log → {log_path}", flush=True)
+    print(f"agent endpoint {base_url} model={model}", flush=True)
     with log_path.open("w", encoding="utf-8") as log:
-        log.write(f"cmd: {' '.join(cmd)}\n\n")
+        log.write(f"cmd: {' '.join(cmd)}\nbase_url={base_url}\n\n")
         log.flush()
         p = subprocess.Popen(
             cmd,
@@ -427,15 +438,66 @@ def reject_changes(accept_sha: str, mode: str) -> None:
             p.unlink(missing_ok=True)
 
 
-def model_ready(model: str) -> bool:
-    r = run(["ollama", "list"], check=False)
-    return model in (r.stdout or "")
+def model_files_ready(model: str) -> bool:
+    if model in {"deepseek-v4-flash-q3", "deepseek-v4-flash-q3:latest"}:
+        if not V4_Q3_DIR.is_dir():
+            return False
+        shards = list(V4_Q3_DIR.glob("DeepSeek-V4-Flash-0731-UD-Q3_K_M-*-of-*.gguf"))
+        # expect 4 complete shards; first is tiny header
+        if len(shards) < 4:
+            return False
+        total = sum(p.stat().st_size for p in shards)
+        return total > 100_000_000_000  # ~100GB+ means not a partial download
+    return False
+
+
+def openai_server_ready(base_url: str, model: str | None = None) -> bool:
+    base = base_url.rstrip("/")
+    url = f"{base}/models"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": "Bearer ollama"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            if resp.status != 200:
+                return False
+        # server up; model id match is optional (alias may differ)
+        return bool(body) and ("\"id\"" in body or "data" in body)
+    except Exception:
+        return False
+
+
+def model_ready(model: str, base_url: str) -> tuple[bool, str]:
+    """Return (ok, hint). Prefers live OpenAI server; falls back to files / ollama list."""
+    if openai_server_ready(base_url, model):
+        return True, f"server ok at {base_url}"
+    if model_files_ready(model):
+        return False, (
+            f"GGUF on disk at {V4_Q3_DIR} but no server at {base_url}.\n"
+            f"  Start: bash scripts/serve_v4_flash_q3.sh"
+        )
+    # Ollama fallback (model tag present)
+    if shutil.which("ollama"):
+        r = run(["ollama", "list"], check=False)
+        if model in (r.stdout or ""):
+            if "11434" in base_url:
+                return True, "ollama model present"
+            return False, (
+                f"Ollama has '{model}' but base-url is {base_url}.\n"
+                f"  Use --base-url http://127.0.0.1:11434/v1"
+            )
+    return False, (
+        f"Model '{model}' not ready.\n"
+        f"  Download Q3: bash scripts/download_v4_flash_q3.sh\n"
+        f"  Serve:       bash scripts/serve_v4_flash_q3.sh\n"
+        f"  Or Ollama:   ollama pull <tag> && --base-url http://127.0.0.1:11434/v1"
+    )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-iters", type=int, default=10)
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible API base")
     ap.add_argument("--agent", default=DEFAULT_AGENT, help="coding CLI binary")
     ap.add_argument("--agent-timeout", type=int, default=3600, help="seconds per agent call")
     ap.add_argument("--train-timeout", type=int, default=7200, help="seconds per full train")
@@ -463,14 +525,11 @@ def main() -> int:
         if shutil.which(args.agent) is None:
             print(f"agent binary not found: {args.agent}", file=sys.stderr)
             return 2
-        if not model_ready(args.model):
-            print(
-                f"Ollama model '{args.model}' not in `ollama list`.\n"
-                f"  Pull: ollama pull {args.model}\n"
-                f"  Or pass --model qwen3.8:27b-q4_K_M while DeepSeek downloads.",
-                file=sys.stderr,
-            )
+        ok, hint = model_ready(args.model, args.base_url)
+        if not ok:
+            print(hint, file=sys.stderr)
             return 2
+        print(hint, flush=True)
 
     try:
         ensure_repo_branch(args.branch)
@@ -504,7 +563,7 @@ def main() -> int:
         pre_sha = head_sha()
         try:
             if not args.no_agent:
-                run_agent(args.model, args.agent, args.agent_timeout)
+                run_agent(args.model, args.agent, args.agent_timeout, args.base_url)
             next_exp = load_next_experiment()
         except Exception as e:
             print(f"agent/next_experiment failed: {e}", file=sys.stderr)
