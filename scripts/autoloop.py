@@ -225,58 +225,50 @@ def tail_experiments(n: int = 12) -> str:
 
 def write_brief(state: State, iteration: int) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
-    strategies = (ROOT / "STRATEGIES.md").read_text(encoding="utf-8") if (ROOT / "STRATEGIES.md").exists() else ""
-    cursor = (ROOT / "CURSOR.md").read_text(encoding="utf-8") if (ROOT / "CURSOR.md").exists() else ""
-    top20 = ""
-    p20 = ROOT / "TOP20_PUBLIC_NOTEBOOKS.md"
-    if p20.exists():
-        top20 = p20.read_text(encoding="utf-8")[:6000]
+    # Keep brief small — full docs live on disk; agent should read paths as needed.
+    # (Qwen+tools already use tens of k tokens; stuffing STRATEGIES/TOP20 blows ctx.)
     brief = f"""# RUN BRIEF — iteration {iteration}
 
-You are the coding agent in an autonomous Kaggle loop for **playground-series-s6e9** (ROC-AUC).
-Work only in this repo. Local DeepSeek via Ollama — no cloud API tokens.
+Autonomous Kaggle loop for **playground-series-s6e9** (ROC-AUC).
+Repo root: `{ROOT}`. Local model only — no cloud API tokens.
 
-## Goal this iteration
+## Goal
 Implement **exactly one** experiment that can beat the current best local CV.
 
-- **Current best CV:** {state.best_cv_str}  (numeric gate: `{state.best_cv:.8f}`)
-- **Public reference:** Deotte notebook ~0.94672; our best LB ~0.94182
-- **Do not submit to Kaggle yourself.** Orchestrator submits only if CV improves.
+- **Current best CV:** {state.best_cv_str}  (gate: `{state.best_cv:.8f}`)
+- **Public reference:** Deotte ~0.94672; our best LB ~0.94182
+- **Do not Kaggle-submit yourself.** Orchestrator submits only if CV improves.
 
 ## Hard rules
-1. One hypothesis only. No multi-unrelated rewrites.
+1. One hypothesis only.
 2. Follow `CURSOR.md` (modular classes, readable, thin CLI).
-3. If you add a strategy, wire `--strategy` in `src/ev_s6e9/__main__.py` and document it in `STRATEGIES.md`.
-4. Prefer real lifts: original-data/recipe features, multi-seed, stacking/blends, notebook ideas from TOP20 — not random `num_leaves` jitter.
-5. Do **not** commit secrets or `data/raw` CSVs.
-6. Do **not** rewrite old `EXPERIMENTS.md` chunks (train appends new ones).
-7. When code is ready, write `outputs/next_experiment.json` (see schema) and stop.
+3. New strategy → wire `--strategy` in `src/ev_s6e9/__main__.py` + `STRATEGIES.md`.
+4. Prefer recipe/original-data, multi-seed, stacks, TOP20 ideas — not random leaf jitter.
+5. No secrets / `data/raw` CSVs. Do not rewrite old `EXPERIMENTS.md` chunks.
+6. When ready, write `outputs/next_experiment.json` and **stop**. Orchestrator trains.
 
-## outputs/next_experiment.json schema
+## outputs/next_experiment.json
 ```json
 {{
-  "title": "short name for logs/commits",
+  "title": "short-slug",
   "hypothesis": "one sentence",
   "strategy": "deotte",
-  "train_args": ["--strategy", "deotte", "--note", "your takeaway"],
+  "train_args": ["--strategy", "deotte", "--note", "takeaway"],
   "predict_args": ["--strategy", "deotte"],
-  "submit_message": "optional message if orchestrator submits"
+  "submit_message": "optional"
 }}
 ```
-`train_args` are passed to `python -m ev_s6e9 train …`.
-Use the project venv mental model: orchestrator runs train, not you (you may smoke-test with `--synth` if cheap).
 
-## Recent experiments
-{tail_experiments(12)}
+## Read these files (do not ignore)
+- `prompts/loop_agent.md`
+- `CURSOR.md`
+- `STRATEGIES.md`
+- `EXPERIMENTS.md` (tail)
+- `TOP20_PUBLIC_NOTEBOOKS.md`
+- `LOOP.md`
 
-## STRATEGIES.md
-{strategies}
-
-## CURSOR.md
-{cursor}
-
-## TOP20 notes (truncated)
-{top20}
+## Recent experiments (tail)
+{tail_experiments(8)}
 """
     BRIEF_PATH.write_text(brief, encoding="utf-8")
     return BRIEF_PATH
@@ -303,12 +295,13 @@ def load_next_experiment() -> dict:
 
 def run_agent(model: str, agent_bin: str, timeout: int, base_url: str) -> None:
     prompt = (
-        f"Read {BRIEF_PATH} and LOOP.md (if present). "
+        f"Read {BRIEF_PATH} first, then prompts/loop_agent.md and CURSOR.md as needed. "
         "Implement ONE experiment end-to-end in this repo. "
         f"Write {NEXT_PATH} when ready to train. "
-        "Do not run full (non-synth) train on all data unless very sure it is quick; "
-        "orchestrator will train. You may run pytest and synth smoke tests. "
-        "Stay on the current git branch; do not force-push."
+        "Do not run full (non-synth) train on all data; orchestrator will train. "
+        "You may run pytest and synth smoke tests. "
+        "Stay on the current git branch; do not force-push. "
+        "Keep tool output and file reads minimal — context is limited."
     )
     env = os.environ.copy()
     env.update(
@@ -318,6 +311,7 @@ def run_agent(model: str, agent_bin: str, timeout: int, base_url: str) -> None:
             "OPENAI_BASE_URL": base_url.rstrip("/"),
             "OPENAI_MODEL": model,
             "EV_S6E9_ROOT": str(ROOT),
+            "QWEN_CODE_SUPPRESS_YOLO_WARNING": "1",
         }
     )
     cmd = [

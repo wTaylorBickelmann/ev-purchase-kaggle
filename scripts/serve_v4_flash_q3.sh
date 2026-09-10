@@ -19,7 +19,7 @@ fi
 
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8080}"
-CTX="${CTX:-32768}"
+CTX="${CTX:-65536}"
 THREADS="${THREADS:-0}"   # 0 = llama default
 MODEL_NAME="${MODEL_NAME:-deepseek-v4-flash-q3}"
 
