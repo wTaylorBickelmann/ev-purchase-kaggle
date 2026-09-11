@@ -6,3 +6,9 @@ Short table only. **Do not rewrite old rows.** Newest at bottom.
 |----|------|----|----|---------|-------|
 | exp0000 | Deotte Fable 5.1 3×XGB equal blend (baseline) | 0.94210 ± 0.00075 | 0.94182 | **keep** | floor for loop; seeds=42 folds=5 |
 | exp0001 | deotte-baseline (no change) | 0.94210 ± 0.00075 | — | kill | train_args identical to parent |
+| exp0001 | deotte-3seed-blend | 0.94212 ± 0.00075 | — | kill | best=0.94210 parent=exp0000 |
+| exp0001 | deotte-plus-lgbm-m4 | — | — | kill | exec: executor timed out after 3600s |
+| exp0001 | deotte-freq-income-commute | 0.94333 ± 0.00070 | pending | **keep** | parent=exp0000 |
+| exp0002 | deotte-te-income | — | — | kill | exec: executor timed out after 3600s |
+| exp0002 | deotte-freq2-age-nmode | 0.94328 ± 0.00073 | — | kill | best=0.94333 parent=exp0001 |
+| exp0002 | deotte-te-income-commute | — | — | kill | exec: executor timed out after 3600s |

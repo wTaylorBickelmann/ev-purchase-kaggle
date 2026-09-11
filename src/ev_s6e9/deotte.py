@@ -122,8 +122,9 @@ def run_cv(
     folds: int = 5,
     seed: int = 42,
     model_overrides: dict | None = None,
+    freq: bool = False,
 ) -> DeotteCvResult:
-    fb = FeatureBuilder().fit(train, test)
+    fb = FeatureBuilder(freq=freq).fit(train, test)
     variants: dict[str, VariantCv] = {}
     oofs = []
     for v in DeotteVariant:
@@ -197,8 +198,9 @@ def train(
     experiments_path: Path | None = None,
     out: Path | None = None,
     model_overrides: dict | None = None,
+    freq: bool = False,
 ) -> DeotteCvResult:
-    cv = run_cv(df, test, folds=folds, seed=seed, model_overrides=model_overrides)
+    cv = run_cv(df, test, folds=folds, seed=seed, model_overrides=model_overrides, freq=freq)
     save_run(df, cv, out=out)
     if log:
         log_experiment(cv, folds=folds, note=note, path=experiments_path)

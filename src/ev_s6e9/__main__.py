@@ -24,6 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     t.add_argument("--note", default="", help="one-line takeaway for EXPERIMENTS.md")
     t.add_argument("--no-log", action="store_true", help="do not append EXPERIMENTS.md")
     t.add_argument("--synth", action="store_true", help="train on tiny synthetic data (no kaggle files)")
+    t.add_argument("--freq", action="store_true", help="add value-count features (Annual_Income_USD, Daily_Commute_km)")
 
     pr = sub.add_parser("predict", help="average fold models → outputs/submission.csv")
     pr.add_argument("--strategy", choices=["lgbm", "deotte"], default=None)
@@ -94,6 +95,7 @@ def main(argv: list[str] | None = None) -> None:
                 note=args.note,
                 experiments_path=EXPERIMENTS_MD,
                 model_overrides=ov or None,
+                freq=args.freq,
             )
         else:
             from ev_s6e9.train import train

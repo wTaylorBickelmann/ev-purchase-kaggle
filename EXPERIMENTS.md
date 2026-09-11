@@ -49,3 +49,8 @@ Template:
 - LB: 0.94182
 - Takeaway: CV≈LB; tiny lift vs LGBM baseline (0.94150), still well below Deotte public 0.94672
 
+### 2026-09-11 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94333 ± 0.00070
+- LB: —
+- Takeaway: exp0001: +freq-encoded income/commute (train+test value counts) in Deotte blend
+
