@@ -73,11 +73,10 @@ python -m ev_s6e9 predict --strategy deotte   # or auto-detect from outputs/cv.j
 
 ## Autonomous local loop (no Cursor tokens)
 
-Deotte/BirdCLEF-style **exp factory**: copy `exps/expNNNN` → one change → CV gate → keep/kill.
-Brain: DeepSeek-V4-Flash Q3 via llama-server + Qwen Code. See **`LOOP.md`**, **`STRATEGY.md`**.
+Planner (**Fable** via OpenRouter, else **Grok**/xAI) + executor (**Qwen 27B** Ollama, fresh session each iter).
+See **`LOOP.md`**, **`STRATEGY.md`**.
 
 ```bash
-bash scripts/serve_v4_flash_q3.sh
 python scripts/autoloop.py --dry-run
 python scripts/autoloop.py --max-iters 20 --submit --push
 ```

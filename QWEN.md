@@ -1,12 +1,10 @@
-# Qwen Code — project context
+# Qwen Code — executor only
 
-EV purchase Kaggle (`playground-series-s6e9`).
+EV purchase Kaggle. When autoloop invokes you, you are the **executor** on a **fresh session**.
 
-When `scripts/autoloop.py` invokes you:
+1. Read `outputs/ITERATION_PLAN.md` + `iteration_plan.json`
+2. Implement that one change in the new `exps/expNNNN/`
+3. Do not full-train or Kaggle-submit
+4. Stop when config/NOTES/(optional code) match the plan
 
-1. Read `outputs/RUN_BRIEF.md` (only task card).
-2. One change in the new `exps/expNNNN/` folder.
-3. Follow `STRATEGY.md` / `LEARNINGS.md` / `prompts/loop_agent.md`.
-4. Do not full-train or Kaggle-submit; stop when config+NOTES are done.
-
-Docs: `LOOP.md`, `CURSOR.md`.
+Planner is a separate model. Do not re-plan the STRATEGY queue unless the plan says so.
