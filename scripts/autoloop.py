@@ -56,10 +56,15 @@ DEFAULT_EXEC_MODEL = os.environ.get("EV_LOOP_EXEC_MODEL", "qwen3.8:27b-q4_K_M")
 DEFAULT_EXEC_BASE = os.environ.get("EV_LOOP_EXEC_BASE_URL", "http://127.0.0.1:11434/v1")
 DEFAULT_AGENT = os.environ.get("EV_LOOP_AGENT", "qwen")
 
-# Planner defaults: Fable if OPENROUTER_API_KEY else Grok/xAI
-DEFAULT_PLAN_MODEL = os.environ.get("EV_LOOP_PLAN_MODEL", "")  # auto
+# Planner: Cursor Agent + Claude Fable (primary). API Grok/OpenRouter = fallback.
+DEFAULT_PLAN_BACKEND = os.environ.get("EV_LOOP_PLAN_BACKEND", "cursor")  # cursor|api
+DEFAULT_PLAN_MODEL = os.environ.get(
+    "EV_LOOP_PLAN_MODEL", "claude-fable-5-1-thinking-high"
+)
+DEFAULT_CURSOR_AGENT = os.environ.get("EV_LOOP_CURSOR_AGENT", str(Path.home() / ".local" / "bin" / "agent"))
 DEFAULT_BEST = 0.94210
 BRANCH = "loop/auto"
+NEXT_STRATEGY = OUT / "NEXT_STRATEGY.md"  # Fable writes this each iter for Qwen
 
 HERMES_ENV = Path.home() / ".hermes" / ".env"
 QWEN_PROJECT = (
@@ -252,33 +257,25 @@ def _tail(path: Path, n: int) -> str:
     return "\n".join(lines if len(lines) <= n else lines[-n:])
 
 
-def resolve_planner() -> tuple[str, str, str]:
-    """Return (base_url, api_key, model_id). Prefer Fable/OpenRouter, else Grok/xAI."""
+def resolve_api_planner() -> tuple[str, str, str]:
+    """API fallback: (base_url, api_key, model_id). Prefer OpenRouter Fable, else Grok."""
     load_dotenv(HERMES_ENV)
-    override = os.environ.get("EV_LOOP_PLAN_MODEL") or DEFAULT_PLAN_MODEL
+    override = os.environ.get("EV_LOOP_API_PLAN_MODEL", "").strip()
     or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     xai_key = os.environ.get("XAI_API_KEY", "").strip()
-
     if override:
         if override.startswith("anthropic/") or "fable" in override.lower():
             if not or_key:
-                raise RuntimeError("EV_LOOP_PLAN_MODEL wants OpenRouter but OPENROUTER_API_KEY missing")
+                raise RuntimeError("API Fable needs OPENROUTER_API_KEY")
             return "https://openrouter.ai/api/v1", or_key, override
-        if override.startswith("grok") or "xai" in override.lower():
-            if not xai_key:
-                raise RuntimeError("planner model needs XAI_API_KEY")
-            return "https://api.x.ai/v1", xai_key, override.replace("xai/", "")
-        # generic openai-compatible
-        base = os.environ.get("EV_LOOP_PLAN_BASE_URL", "https://api.x.ai/v1")
-        key = os.environ.get("EV_LOOP_PLAN_API_KEY") or xai_key or or_key
-        return base.rstrip("/"), key, override
-
+        if not xai_key:
+            raise RuntimeError("API planner needs XAI_API_KEY")
+        return "https://api.x.ai/v1", xai_key, override.replace("xai/", "")
     if or_key:
         return "https://openrouter.ai/api/v1", or_key, "anthropic/claude-fable-5.1"
     if xai_key:
-        # Fable unavailable without OpenRouter — Grok is the planning stand-in
-        return "https://api.x.ai/v1", xai_key, os.environ.get("EV_LOOP_PLAN_FALLBACK", "grok-4.5")
-    raise RuntimeError("No planner credentials (need OPENROUTER_API_KEY for Fable or XAI_API_KEY for Grok)")
+        return "https://api.x.ai/v1", xai_key, "grok-4.5"
+    raise RuntimeError("No API planner credentials")
 
 
 def openai_chat(
@@ -320,14 +317,12 @@ def openai_chat(
         raise RuntimeError(f"planner empty response: {payload!r}"[:500])
     msg = choices[0].get("message") or {}
     content = msg.get("content") or ""
-    # some models put final answer after reasoning
     if not content and msg.get("reasoning_content"):
         content = msg["reasoning_content"]
     return content.strip()
 
 
 def extract_json_object(text: str) -> dict:
-    """Pull first JSON object from model text (fences ok)."""
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fence:
         return json.loads(fence.group(1))
@@ -338,44 +333,110 @@ def extract_json_object(text: str) -> dict:
     raise ValueError(f"no JSON object in planner output:\n{text[:1000]}")
 
 
-def build_planner_prompt(state: State, new_exp: str, parent: str) -> str:
-    parent_cfg = ""
-    pcfg = EXPS / parent / "config.json"
-    if pcfg.exists():
-        parent_cfg = pcfg.read_text(encoding="utf-8")
-    parent_notes = _tail(EXPS / parent / "NOTES.md", 40)
-    strategy = STRATEGY.read_text(encoding="utf-8") if STRATEGY.exists() else ""
-    learnings = _tail(LEARNINGS, 40)
-    index = INDEX.read_text(encoding="utf-8") if INDEX.exists() else ""
-    strategies = ""
-    sp = ROOT / "STRATEGIES.md"
-    if sp.exists():
-        strategies = sp.read_text(encoding="utf-8")[:6000]
+def plan_from_files(new_exp: str, parent: str, planner_model: str) -> dict:
+    """Load plan written by Cursor Fable (or synthesize from NEXT_STRATEGY.md)."""
+    if PLAN_JSON.exists():
+        try:
+            plan = json.loads(PLAN_JSON.read_text(encoding="utf-8"))
+            if isinstance(plan, dict) and (plan.get("config") or plan.get("hypothesis")):
+                plan["planner_model"] = plan.get("planner_model") or planner_model
+                plan["exp_id"] = new_exp
+                return plan
+        except Exception:
+            pass
+    # Minimal plan from markdown only — executor must do the heavy lift
+    md = ""
+    if NEXT_STRATEGY.exists():
+        md = NEXT_STRATEGY.read_text(encoding="utf-8")
+    elif PLAN_MD.exists():
+        md = PLAN_MD.read_text(encoding="utf-8")
+    title = "from-next-strategy"
+    m = re.search(r"^#\s+(.+)$", md, re.M)
+    if m:
+        title = re.sub(r"[^\w\-]+", "-", m.group(1).strip().lower())[:48].strip("-") or title
+    hyp = ""
+    for key in ("Hypothesis", "hypothesis", "One change", "Change"):
+        mm = re.search(rf"\*\*{key}\*\*:\s*(.+)", md)
+        if mm:
+            hyp = mm.group(1).strip()
+            break
+    if not hyp:
+        hyp = (md.strip().splitlines() or ["see NEXT_STRATEGY.md"])[0][:200]
+    needs = "needs_code" in md.lower() or "src/ev_s6e9" in md or "implement" in md.lower()
+    cfg = {
+        "id": new_exp,
+        "title": title,
+        "hypothesis": hyp,
+        "parent": parent,
+        "strategy": "deotte",
+        "train_args": ["--strategy", "deotte", "--note", f"{new_exp}: {hyp[:60]}"],
+        "predict_args": ["--strategy", "deotte"],
+        "submit_message": new_exp,
+        "folds": 5,
+        "seed": 42,
+        "status": "wip",
+    }
+    # try pull train_args fence from md
+    ta = re.search(r"train_args\"?\s*:\s*(\[[^\]]+\])", md)
+    if ta:
+        try:
+            cfg["train_args"] = json.loads(ta.group(1).replace("'", '"'))
+        except Exception:
+            pass
+    plan = {
+        "title": title,
+        "hypothesis": hyp,
+        "one_change": hyp,
+        "rationale": "from NEXT_STRATEGY.md",
+        "needs_code": needs,
+        "code_instructions": md[:4000],
+        "files_to_edit": [f"exps/{new_exp}/config.json", f"exps/{new_exp}/NOTES.md"],
+        "config": cfg,
+        "notes_md": f"# {new_exp}\n\n**Hypothesis:** {hyp}\n\nSee outputs/NEXT_STRATEGY.md\n",
+        "executor_checklist": [
+            "Read outputs/NEXT_STRATEGY.md fully",
+            "Implement exactly one change",
+            "Stop when done",
+        ],
+        "planner_model": planner_model,
+        "exp_id": new_exp,
+    }
+    PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    return plan
 
-    return f"""You are the PLANNER for a Kaggle playground-series-s6e9 ROC-AUC experiment factory.
-You do NOT write code. You output ONE JSON plan for the executor.
 
-## Goal
-Propose exactly ONE experiment change for `{new_exp}` (parent `{parent}`) to beat best CV **{state.best_cv_str}** (gate {state.best_cv:.8f}).
-Target public north star ~0.94672 (Deotte). Prefer structural ideas over hyperparam jitter.
+def build_cursor_planner_prompt(state: State, new_exp: str, parent: str) -> str:
+    return f"""You are the PLANNER for Kaggle playground-series-s6e9 (ROC-AUC).
 
-## Hard rules
-- Do not change metric (ROC-AUC) or default fold protocol (n=5 stratified) unless STRATEGY explicitly allows.
-- Do not peek test labels.
-- Skip ideas already killed in LEARNINGS / index for the same substance.
-- Prefer top unchecked item in STRATEGY queue when still valid.
-- If the change needs new library capability, set needs_code=true and give precise code_instructions.
-- If config-only (train_args / strategy flags already exist), needs_code=false and fill config completely.
+Assess progress and propose the **next single experiment** for `{new_exp}` (parent `{parent}`).
+Best CV so far: **{state.best_cv_str}** (gate {state.best_cv:.8f}). North star ~0.94672.
 
-## Output
-Return ONLY a JSON object (no prose outside JSON) with this shape:
+## Read (do not rewrite history)
+- STRATEGY.md
+- LEARNINGS.md
+- reports/index.md
+- STRATEGIES.md
+- exps/{parent}/config.json
+- exps/{parent}/NOTES.md
+- outputs/loop_state.json (if present)
+
+## Write ONLY these files (overwrite)
+1. `outputs/NEXT_STRATEGY.md` — human plan for the Qwen executor:
+   - Title / hypothesis / why now
+   - Exact one change
+   - Files to touch
+   - Step-by-step implementation (Qwen is ~27B — be concrete, small diffs)
+   - How train_args / config should look
+   - What NOT to do (metric/folds/leak)
+2. `outputs/iteration_plan.json` — machine plan, this exact schema:
+```json
 {{
   "title": "short-slug",
   "hypothesis": "one sentence",
-  "rationale": "why this vs alternatives",
+  "rationale": "why",
   "one_change": "single concrete change",
-  "needs_code": false,
-  "code_instructions": "empty string OR precise steps/files/APIs to add",
+  "needs_code": true,
+  "code_instructions": "precise steps for Qwen",
   "files_to_edit": ["exps/{new_exp}/config.json", "exps/{new_exp}/NOTES.md"],
   "config": {{
     "id": "{new_exp}",
@@ -390,72 +451,130 @@ Return ONLY a JSON object (no prose outside JSON) with this shape:
     "seed": 42,
     "status": "wip"
   }},
-  "notes_md": "# {new_exp}\\n\\n**Hypothesis:** ...\\n\\n**Change:** ...\\n",
-  "executor_checklist": ["verify train_args differ from parent", "stop after edits"]
+  "notes_md": "# {new_exp}\\n\\n**Hypothesis:** ...\\n",
+  "executor_checklist": ["...", "stop after edits"]
 }}
+```
+3. Also copy the same markdown into `outputs/ITERATION_PLAN.md` (same content as NEXT_STRATEGY or a short pointer).
 
-## STRATEGY.md
-{strategy}
-
-## STRATEGIES.md (implementation reference)
-{strategies}
-
-## LEARNINGS (tail)
-{learnings}
-
-## reports/index.md
-{index}
-
-## Parent config
-{parent_cfg}
-
-## Parent NOTES
-{parent_notes}
+## Rules
+- ONE change only. Prefer top unchecked STRATEGY item if still valid.
+- Skip killed LEARNINGS ideas.
+- Do NOT train, submit, or edit src/ unless the JSON needs_code instructions require the executor to later.
+- You are planner only — do not implement the experiment code yourself beyond writing the plan files.
+- Stop when the three outputs exist and JSON is valid.
 """
 
 
-def run_planner(state: State, new_exp: str, parent: str) -> dict:
-    base, key, model = resolve_planner()
-    prompt = build_planner_prompt(state, new_exp, parent)
-    print(f"planner model={model} base={base}", flush=True)
+def run_planner_cursor(
+    state: State,
+    new_exp: str,
+    parent: str,
+    *,
+    model: str,
+    agent_bin: str,
+    timeout: int,
+) -> dict:
+    if shutil.which(agent_bin) is None and not Path(agent_bin).exists():
+        raise RuntimeError(f"Cursor agent not found: {agent_bin}")
+    # clear prior plan artifacts so we don't accept stale JSON
+    for p in (PLAN_JSON, PLAN_MD, NEXT_STRATEGY):
+        if p.exists():
+            p.unlink()
+    prompt = build_cursor_planner_prompt(state, new_exp, parent)
+    cmd = [
+        agent_bin,
+        "--print",
+        "--yolo",
+        "--trust",
+        "--workspace",
+        str(ROOT),
+        "--model",
+        model,
+        "--output-format",
+        "text",
+        prompt,
+    ]
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"planner_cursor_{int(time.time())}.log"
+    print(f"planner (Cursor Fable) model={model} log→ {log_path}", flush=True)
     t0 = time.time()
+    with log_path.open("w", encoding="utf-8") as log:
+        log.write(f"cmd: {' '.join(cmd[:8])} ...\n\n")
+        log.flush()
+        p = subprocess.Popen(
+            cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT, text=True
+        )
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            raise RuntimeError(f"Cursor planner timed out after {timeout}s")
+    print(f"planner cursor done in {time.time() - t0:.1f}s rc={rc}", flush=True)
+    if rc != 0 and not (PLAN_JSON.exists() or NEXT_STRATEGY.exists()):
+        raise RuntimeError(f"Cursor planner exited {rc}; see {log_path}")
+    if not NEXT_STRATEGY.exists() and PLAN_MD.exists():
+        shutil.copy2(PLAN_MD, NEXT_STRATEGY)
+    if not NEXT_STRATEGY.exists() and not PLAN_JSON.exists():
+        raise RuntimeError(f"planner wrote neither NEXT_STRATEGY.md nor plan JSON; see {log_path}")
+    plan = plan_from_files(new_exp, parent, model)
+    # ensure NEXT_STRATEGY exists for Qwen
+    if not NEXT_STRATEGY.exists() and PLAN_MD.exists():
+        shutil.copy2(PLAN_MD, NEXT_STRATEGY)
+    if not PLAN_MD.exists() and NEXT_STRATEGY.exists():
+        shutil.copy2(NEXT_STRATEGY, PLAN_MD)
+    plan["planner_backend"] = "cursor"
+    PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    BRIEF_PATH.write_text(
+        f"# RUN BRIEF\n\nPlanner: Cursor `{model}`\n\n"
+        f"Executor: read `outputs/NEXT_STRATEGY.md` + `iteration_plan.json`.\n",
+        encoding="utf-8",
+    )
+    return plan
+
+
+def run_planner_api(state: State, new_exp: str, parent: str) -> dict:
+    base, key, model = resolve_api_planner()
+    # reuse a compact API prompt
+    parent_cfg = ""
+    pcfg = EXPS / parent / "config.json"
+    if pcfg.exists():
+        parent_cfg = pcfg.read_text(encoding="utf-8")
+    prompt = f"""Kaggle s6e9 planner. Best CV {state.best_cv_str}. New exp {new_exp} parent {parent}.
+Read mental context:
+STRATEGY:\n{_tail(STRATEGY, 80)}\nLEARNINGS:\n{_tail(LEARNINGS, 30)}\nINDEX:\n{_tail(INDEX, 20)}\nPARENT:\n{parent_cfg}
+
+Return ONLY JSON with keys title,hypothesis,rationale,one_change,needs_code,code_instructions,files_to_edit,config,notes_md,executor_checklist.
+config.id={new_exp} config.parent={parent} config.status=wip.
+"""
+    print(f"planner (API) model={model} base={base}", flush=True)
     text = openai_chat(
         base,
         key,
         model,
         [
-            {
-                "role": "system",
-                "content": "You are a meticulous Kaggle experiment planner. Output valid JSON only.",
-            },
+            {"role": "system", "content": "Output valid JSON only."},
             {"role": "user", "content": prompt},
         ],
         max_tokens=4096,
         temperature=0.2,
-        timeout=300,
     )
-    print(f"planner done in {time.time() - t0:.1f}s ({len(text)} chars)", flush=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    (LOG_DIR / f"planner_{int(time.time())}.txt").write_text(text, encoding="utf-8")
+    (LOG_DIR / f"planner_api_{int(time.time())}.txt").write_text(text, encoding="utf-8")
     plan = extract_json_object(text)
-    # normalize
     plan.setdefault("needs_code", False)
     cfg = plan.get("config") or {}
     cfg["id"] = new_exp
     cfg["parent"] = parent
     cfg["status"] = "wip"
-    if plan.get("title"):
-        cfg.setdefault("title", plan["title"])
-    if plan.get("hypothesis"):
-        cfg.setdefault("hypothesis", plan["hypothesis"])
     plan["config"] = cfg
     plan["planner_model"] = model
+    plan["planner_backend"] = "api"
     plan["exp_id"] = new_exp
     PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     md = [
-        f"# ITERATION PLAN — {new_exp}",
+        f"# NEXT STRATEGY — {new_exp}",
         "",
-        f"**Planner:** `{model}`",
+        f"**Planner:** `{model}` (API)",
         f"**Title:** {plan.get('title')}",
         f"**Hypothesis:** {plan.get('hypothesis')}",
         f"**One change:** {plan.get('one_change')}",
@@ -467,18 +586,34 @@ def run_planner(state: State, new_exp: str, parent: str) -> dict:
         "## Code instructions",
         str(plan.get("code_instructions") or "(none)"),
         "",
-        "## Executor checklist",
+        "## config",
+        "```json",
+        json.dumps(cfg, indent=2),
+        "```",
+        "",
     ]
-    for item in plan.get("executor_checklist") or []:
-        md.append(f"- {item}")
-    md += ["", "## config.json", "```json", json.dumps(cfg, indent=2), "```", ""]
-    PLAN_MD.write_text("\n".join(md) + "\n", encoding="utf-8")
-    # compatibility brief for old docs
-    BRIEF_PATH.write_text(
-        f"# RUN BRIEF — see {PLAN_MD.name}\n\nExecutor implements ITERATION_PLAN only. Fresh session.\n",
-        encoding="utf-8",
-    )
+    NEXT_STRATEGY.write_text("\n".join(md) + "\n", encoding="utf-8")
+    PLAN_MD.write_text(NEXT_STRATEGY.read_text(encoding="utf-8"), encoding="utf-8")
     return plan
+
+
+def run_planner(
+    state: State,
+    new_exp: str,
+    parent: str,
+    *,
+    backend: str,
+    model: str,
+    cursor_bin: str,
+    timeout: int,
+) -> dict:
+    if backend == "cursor":
+        return run_planner_cursor(
+            state, new_exp, parent, model=model, agent_bin=cursor_bin, timeout=timeout
+        )
+    if backend == "api":
+        return run_planner_api(state, new_exp, parent)
+    raise ValueError(f"unknown plan backend: {backend}")
 
 
 def apply_plan_files(plan: dict, new_exp: str) -> None:
@@ -530,12 +665,12 @@ def run_executor(
         raise RuntimeError(f"Ollama model not ready: {model}. Run: ollama pull {model}")
 
     checklist = "\n".join(f"- {x}" for x in (plan.get("executor_checklist") or []))
-    prompt = f"""FRESH SESSION. You are the EXECUTOR only.
+    prompt = f"""FRESH SESSION. You are the EXECUTOR only (Qwen). Planner already ran (Cursor Fable).
 
-Read these files and implement the plan — nothing else:
-1. outputs/ITERATION_PLAN.md
+Read these files first — they are the whole task:
+1. outputs/NEXT_STRATEGY.md   ← primary human plan
 2. outputs/iteration_plan.json
-3. exps/{new_exp}/config.json (already written by orchestrator — update if plan requires)
+3. exps/{new_exp}/config.json (seeded from plan — update if needed)
 4. exps/{new_exp}/NOTES.md
 
 ## Mission
@@ -543,18 +678,16 @@ Read these files and implement the plan — nothing else:
 
 needs_code={plan.get('needs_code')}
 code_instructions:
-{plan.get('code_instructions') or '(config-only; verify files match plan)'}
+{plan.get('code_instructions') or '(follow NEXT_STRATEGY.md)'}
 
 ## Checklist
 {checklist}
 
 ## Rules
-- One change only as specified in the plan.
-- Prefer editing exps/{new_exp}/ and minimal src/ev_s6e9/** only if code_instructions say so.
-- Do NOT train full data. Do NOT kaggle submit. Do NOT read the whole repo.
+- Implement exactly the one change in NEXT_STRATEGY.md.
+- Prefer exps/{new_exp}/ + minimal src/ev_s6e9/** only if the plan requires code.
+- Do NOT train full data. Do NOT kaggle submit. Do NOT re-plan STRATEGY.
 - When done, stop.
-
-Working directory is the repo root.
 """
     env = os.environ.copy()
     env.update(
@@ -717,7 +850,19 @@ def main() -> int:
     load_dotenv(HERMES_ENV)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-iters", type=int, default=10)
-    ap.add_argument("--plan-model", default=os.environ.get("EV_LOOP_PLAN_MODEL", ""), help="empty=auto Fable||Grok")
+    ap.add_argument(
+        "--plan-backend",
+        default=DEFAULT_PLAN_BACKEND,
+        choices=["cursor", "api"],
+        help="cursor=Cursor Agent Claude Fable; api=OpenRouter/xAI fallback",
+    )
+    ap.add_argument(
+        "--plan-model",
+        default=DEFAULT_PLAN_MODEL,
+        help="Cursor model id (default claude-fable-5-1-thinking-high) or API model",
+    )
+    ap.add_argument("--cursor-agent", default=DEFAULT_CURSOR_AGENT)
+    ap.add_argument("--planner-timeout", type=int, default=900, help="Cursor/API planner timeout (s)")
     ap.add_argument("--exec-model", default=DEFAULT_EXEC_MODEL)
     ap.add_argument("--exec-base-url", default=DEFAULT_EXEC_BASE)
     ap.add_argument("--agent", default=DEFAULT_AGENT)
@@ -734,8 +879,6 @@ def main() -> int:
     ap.add_argument("--stop-after-no-improve", type=int, default=8)
     ap.add_argument("--target-cv", type=float, default=0.94672)
     args = ap.parse_args()
-    if args.plan_model:
-        os.environ["EV_LOOP_PLAN_MODEL"] = args.plan_model
 
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -747,13 +890,19 @@ def main() -> int:
         print("missing exps/exp0000", file=sys.stderr)
         return 2
 
-    # planner creds check early
-    try:
-        base, _, model = resolve_planner()
-        print(f"planner ready: {model} @ {base}", flush=True)
-    except Exception as e:
-        print(f"planner not configured: {e}", file=sys.stderr)
-        return 2
+    if args.plan_backend == "cursor":
+        cab = args.cursor_agent
+        if shutil.which(cab) is None and not Path(cab).exists():
+            print(f"Cursor agent not found: {cab}", file=sys.stderr)
+            return 2
+        print(f"planner ready: Cursor {args.plan_model} via {cab}", flush=True)
+    else:
+        try:
+            base, _, model = resolve_api_planner()
+            print(f"planner ready: API {model} @ {base}", flush=True)
+        except Exception as e:
+            print(f"planner not configured: {e}", file=sys.stderr)
+            return 2
 
     if not args.dry_run and not args.no_executor:
         if shutil.which(args.agent) is None:
@@ -802,9 +951,21 @@ def main() -> int:
         copy_exp(parent, new_id)
         pre_sha = head_sha()
         try:
-            plan = run_planner(state, new_id, parent)
+            plan = run_planner(
+                state,
+                new_id,
+                parent,
+                backend=args.plan_backend,
+                model=args.plan_model,
+                cursor_bin=args.cursor_agent,
+                timeout=args.planner_timeout,
+            )
             apply_plan_files(plan, new_id)
-            print(f"plan: {plan.get('title')} | needs_code={plan.get('needs_code')}", flush=True)
+            print(
+                f"plan: {plan.get('title')} | needs_code={plan.get('needs_code')} | "
+                f"backend={plan.get('planner_backend')}",
+                flush=True,
+            )
         except Exception as e:
             print(f"planner failed: {e}", file=sys.stderr)
             day = datetime.now(timezone.utc).date().isoformat()
@@ -819,9 +980,8 @@ def main() -> int:
             continue
 
         if args.dry_run:
-            print(f"dry-run: wrote {PLAN_JSON} and {PLAN_MD}; stop")
+            print(f"dry-run: wrote {NEXT_STRATEGY} / {PLAN_JSON}; stop")
             state.iteration -= 1  # don't count dry-run
-            # leave exp folder for inspection
             state.save(STATE_PATH)
             return 0
 
