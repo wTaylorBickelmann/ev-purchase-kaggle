@@ -1,74 +1,82 @@
-# Autonomous experiment loop — Deotte / BirdCLEF-style factory
+# Autonomous experiment loop — planner + executor
 
-Local **DeepSeek-V4-Flash Q3** + Qwen Code. **Files are memory** (fresh agent context each iter).
+Two-model factory for **playground-series-s6e9**.
 
-Inspired by medal loops (Lin-Chieh Huang BirdCLEF, Chris Deotte playground, etc.):
-score-gated copy → one change → train → keep/kill — not “chat until gold.”
+| Role | Model | Job |
+|------|--------|-----|
+| **Planner** | **Claude Fable 5.1** via OpenRouter when `OPENROUTER_API_KEY` is set; else **Grok** via xAI | Read STRATEGY / LEARNINGS / index / parent → write one-iteration plan |
+| **Executor** | **Qwen 3.8 27B** (Ollama `qwen3.8:27b-q4_K_M`) via Qwen Code CLI | **Fresh session every iteration** — implement the plan only (short context) |
+| **Orchestrator** | `scripts/autoloop.py` | Copy exp → plan → (optional code) → train → CV gate keep/kill |
+
+DeepSeek V4 is **not** on the hot path anymore (too slow / context thrash for this harness).
+
+## Cycle
+
+1. Copy last **keep** `exps/expNNNN` → `expNNNN+1`
+2. **Planner** → `outputs/iteration_plan.json` + `ITERATION_PLAN.md`
+3. Orchestrator writes plan `config.json` + `NOTES.md`
+4. If `needs_code` → **Qwen** fresh session (`-y`, no chat resume)
+5. `python scripts/run_exp.py expNNNN+1` → `metrics.json`
+6. Keep iff `cv_mean >= best + ε` (optional Kaggle submit); else kill + LEARNINGS
 
 ## Layout
 
 ```
-STRATEGY.md          # human queue + forbidden (leak rules)
+STRATEGY.md          # human queue + leak rules
 LEARNINGS.md         # append-only failures
-reports/index.md     # id | idea | CV | LB | keep/kill
-exps/
-  exp0000/           # accepted floor (Deotte blend)
-    config.json
-    NOTES.md
-    metrics.json
-  exp0001/           # copy + one diff
-scripts/
-  run_exp.py         # config → train → metrics.json (prints cv_score=...)
-  autoloop.py        # outer factory
+reports/index.md     # keep/kill table
+exps/exp0000/        # accepted floor
+outputs/iteration_plan.json
+outputs/ITERATION_PLAN.md
+scripts/autoloop.py
+scripts/run_exp.py
 ```
 
-## Cycle (orchestrator)
+## Setup
 
-1. Copy last **keep** exp → `expNNNN+1`
-2. Write short `outputs/RUN_BRIEF.md` (STRATEGY + LEARNINGS + index)
-3. Agent edits **only** the new exp (one hypothesis)
-4. `python scripts/run_exp.py expNNNN+1` → `metrics.json`
-5. **Keep** iff `cv_mean >= best + ε` → commit/push; optional Kaggle submit  
-   else **kill** → LEARNINGS + index row; reset tree to last accept
-6. Repeat
+```bash
+# executor
+ollama pull qwen3.8:27b-q4_K_M
+
+# planner: either
+#   export OPENROUTER_API_KEY=...   # enables anthropic/claude-fable-5.1
+# or use existing XAI_API_KEY (Grok fallback) from ~/.hermes/.env
+```
 
 ## Run
 
 ```bash
-# terminal A
-bash scripts/serve_v4_flash_q3.sh   # ctx 65k
-
-# terminal B
 source .venv/bin/activate
-python scripts/autoloop.py --dry-run          # copy + brief only
+python scripts/autoloop.py --dry-run          # planner only
 python scripts/autoloop.py --max-iters 20 --submit --push
 ```
 
-Qwen fallback:
+Override models:
+
 ```bash
-python scripts/autoloop.py --model qwen3.8:27b-q4_K_M \
-  --base-url http://127.0.0.1:11434/v1 --max-iters 5 --push
+# force Fable (requires OpenRouter)
+EV_LOOP_PLAN_MODEL=anthropic/claude-fable-5.1 OPENROUTER_API_KEY=... \
+  python scripts/autoloop.py --max-iters 5
+
+# force Grok planner
+EV_LOOP_PLAN_MODEL=grok-4.5 python scripts/autoloop.py --max-iters 5
+
+# executor
+python scripts/autoloop.py --exec-model qwen3.8:27b-q4_K_M \
+  --exec-base-url http://127.0.0.1:11434/v1
 ```
 
-## Standing rules
+Flags: `--no-executor` (config-only plans), `--force-executor`, `--on-reject reset|keep`.
 
-| Rule | |
-|------|--|
-| One change per iteration | yes |
-| Do not edit metric / fold protocol | yes (unless STRATEGY says) |
-| Failures → LEARNINGS.md | yes |
-| Human owns STRATEGY + CV design | yes |
-| Agent owns implement in new exp folder | yes |
-| State on disk not chat | yes |
+## Why fresh Qwen sessions
+
+Qwen degrades on long coding threads. Each executor call:
+- deletes `~/.qwen/projects/.../chats` for this repo
+- starts without `--continue`
+- gets only the iteration plan + exp paths (not full history)
 
 ## Human knobs
 
-- Edit **`STRATEGY.md`** queue (check off ideas; add forbidden)
-- Set `"stop": "1"` in `outputs/loop_state.json` to halt
-- Pause: kill autoloop; leave llama-server if you want
-
-## Logs
-
-- `logs/loop/autoloop_stdout.log`
-- `logs/loop/agent_*.log`
-- `reports/index.md`
+- Edit **`STRATEGY.md`** queue
+- `"stop": "1"` in `outputs/loop_state.json`
+- Kill: `pkill -f scripts/autoloop.py`

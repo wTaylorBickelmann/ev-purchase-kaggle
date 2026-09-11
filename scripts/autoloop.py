@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Deotte / BirdCLEF-style score-gated experiment factory.
+"""Two-model score-gated experiment factory.
 
-Fresh agent context every iteration. **Files are memory.**
+Planner (strong reasoning API — Claude Fable 5.1 via OpenRouter when keyed,
+else Grok via xAI): reads STRATEGY / LEARNINGS / index / parent → writes a
+tight iteration plan.
+
+Executor (local Qwen ~27–28B via Ollama + Qwen Code CLI): **fresh session every
+iteration**, implements only that plan (short context).
+
+Then orchestrator trains + CV-gates keep/kill.
 
 Cycle:
-  1. Read STRATEGY.md, LEARNINGS.md, reports/index.md, last keep exp
-  2. Copy exps/expNNNN → expNNNN+1
-  3. Agent makes **one** change in the new folder (config / NOTES; shared lib only if required)
-  4. python scripts/run_exp.py expNNNN+1  → metrics.json with cv_mean
-  5. Keep iff cv_mean >= best + min_delta; else kill (reset tree) + LEARNINGS
-  6. Append reports/index.md; optional Kaggle submit on keep
+  1. Copy last keep exp → expNNNN+1
+  2. Planner → outputs/iteration_plan.json + ITERATION_PLAN.md
+  3. Apply config from plan; if needs_code → Qwen fresh session
+  4. python scripts/run_exp.py expNNNN+1
+  5. Keep iff cv_mean >= best + ε else kill
 
 Examples:
   python scripts/autoloop.py --dry-run
-  # terminal A: bash scripts/serve_v4_flash_q3.sh
-  # terminal B:
   python scripts/autoloop.py --max-iters 20 --submit --push
 """
 from __future__ import annotations
@@ -27,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -40,15 +45,29 @@ INDEX = REPORTS / "index.md"
 STRATEGY = ROOT / "STRATEGY.md"
 LEARNINGS = ROOT / "LEARNINGS.md"
 STATE_PATH = OUT / "loop_state.json"
-BRIEF_PATH = OUT / "RUN_BRIEF.md"
+PLAN_JSON = OUT / "iteration_plan.json"
+PLAN_MD = OUT / "ITERATION_PLAN.md"
+BRIEF_PATH = OUT / "RUN_BRIEF.md"  # kept for compatibility (points at plan)
 LOG_DIR = ROOT / "logs" / "loop"
 VENV_PY = ROOT / ".venv" / "bin" / "python"
-DEFAULT_MODEL = os.environ.get("EV_LOOP_MODEL", "deepseek-v4-flash-q3")
-DEFAULT_BASE_URL = os.environ.get("EV_LOOP_BASE_URL", "http://127.0.0.1:8080/v1")
+
+# Executor defaults: local Qwen 27B (user: ~28B class)
+DEFAULT_EXEC_MODEL = os.environ.get("EV_LOOP_EXEC_MODEL", "qwen3.8:27b-q4_K_M")
+DEFAULT_EXEC_BASE = os.environ.get("EV_LOOP_EXEC_BASE_URL", "http://127.0.0.1:11434/v1")
 DEFAULT_AGENT = os.environ.get("EV_LOOP_AGENT", "qwen")
+
+# Planner defaults: Fable if OPENROUTER_API_KEY else Grok/xAI
+DEFAULT_PLAN_MODEL = os.environ.get("EV_LOOP_PLAN_MODEL", "")  # auto
 DEFAULT_BEST = 0.94210
 BRANCH = "loop/auto"
-V4_Q3_DIR = Path.home() / "Models" / "deepseek-v4-flash-q3" / "UD-Q3_K_M"
+
+HERMES_ENV = Path.home() / ".hermes" / ".env"
+QWEN_PROJECT = (
+    Path.home()
+    / ".qwen"
+    / "projects"
+    / "-Users-will-Documents-code-projects-ev-purchase-kaggle"
+)
 
 KEEP_ON_CLEAN = {
     "data",
@@ -58,7 +77,7 @@ KEEP_ON_CLEAN = {
     ".git",
     ".pytest_cache",
     "__pycache__",
-    "exps",  # handled explicitly
+    "exps",
     "reports",
 }
 
@@ -107,6 +126,19 @@ class State:
         path.write_text(json.dumps(asdict(self), indent=2) + "\n", encoding="utf-8")
 
 
+def load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
 def py() -> str:
     return str(VENV_PY) if VENV_PY.exists() else sys.executable
 
@@ -127,8 +159,7 @@ def ensure_branch(branch: str) -> None:
     cur = git("rev-parse", "--abbrev-ref", "HEAD")
     if cur == branch:
         return
-    listed = git("branch", "--list", branch)
-    if listed:
+    if git("branch", "--list", branch):
         git("checkout", branch)
     else:
         git("checkout", "-b", branch)
@@ -160,18 +191,14 @@ def load_metrics(exp_dir: Path) -> dict | None:
     return json.loads(m.read_text(encoding="utf-8"))
 
 
-def best_from_index_and_exps() -> tuple[float, str, str]:
-    """Return best_cv, best_cv_str, best_exp_id from non-kill metrics."""
-    best = 0.0
-    best_s = ""
-    best_exp = "exp0000"
+def best_from_exps() -> tuple[float, str, str]:
+    best, best_s, best_exp = 0.0, "", "exp0000"
     for p in list_exps():
         met = load_metrics(p) or {}
         cfg: dict = {}
         if (p / "config.json").exists():
             cfg = json.loads((p / "config.json").read_text(encoding="utf-8"))
-        status = str(met.get("status") or cfg.get("status") or "").lower()
-        if status == "kill":
+        if str(met.get("status") or cfg.get("status") or "").lower() == "kill":
             continue
         mean = met.get("cv_mean", cfg.get("cv_mean"))
         if mean is None:
@@ -187,14 +214,12 @@ def best_from_index_and_exps() -> tuple[float, str, str]:
 
 
 def copy_exp(src_id: str, dst_id: str) -> Path:
-    src = EXPS / src_id
-    dst = EXPS / dst_id
+    src, dst = EXPS / src_id, EXPS / dst_id
     if not src.is_dir():
         raise FileNotFoundError(src)
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("models", "__pycache__", "*.joblib"))
-    # reset runtime artifacts in copy
     for name in ("metrics.json", "cv.json", "oof.csv", "submission.csv"):
         p = dst / name
         if p.exists():
@@ -207,125 +232,330 @@ def copy_exp(src_id: str, dst_id: str) -> Path:
             "parent": src_id,
             "status": "wip",
             "title": cfg.get("title") or dst_id,
-            "hypothesis": cfg.get("hypothesis") or "TBD — agent must set one change",
+            "hypothesis": "TBD — set by planner",
         }
     )
     for k in ("cv_mean", "cv_std", "cv", "lb"):
         cfg.pop(k, None)
     cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    notes = dst / "NOTES.md"
-    notes.write_text(
-        f"# {dst_id}\n\n**Parent:** {src_id}\n\n**Hypothesis:** (agent fills — one change only)\n\n"
-        f"**Change log:**\n- copied from {src_id}\n",
+    (dst / "NOTES.md").write_text(
+        f"# {dst_id}\n\n**Parent:** {src_id}\n\n**Hypothesis:** (planner/executor)\n",
         encoding="utf-8",
     )
     return dst
 
 
-def _tail_lines(path: Path, n: int) -> str:
+def _tail(path: Path, n: int) -> str:
     if not path.exists():
         return "(missing)"
     lines = path.read_text(encoding="utf-8").splitlines()
-    if len(lines) <= n:
-        return "\n".join(lines)
-    return "\n".join(lines[-n:])
+    return "\n".join(lines if len(lines) <= n else lines[-n:])
 
 
-def write_brief(state: State, new_exp: str, parent: str) -> Path:
-    """Compact task card — agent must open STRATEGY/LEARNINGS/index on disk."""
-    OUT.mkdir(parents=True, exist_ok=True)
-    index_tail = _tail_lines(INDEX, 12)
-    learnings_tail = _tail_lines(LEARNINGS, 15)
-    # queue excerpt only (not full STRATEGY)
-    strategy_q = ""
-    if STRATEGY.exists():
-        body = STRATEGY.read_text(encoding="utf-8")
-        if "## Queue" in body:
-            strategy_q = body.split("## Queue", 1)[1]
-            strategy_q = "## Queue" + strategy_q.split("## Stop", 1)[0]
-        strategy_q = strategy_q[:1800]
+def resolve_planner() -> tuple[str, str, str]:
+    """Return (base_url, api_key, model_id). Prefer Fable/OpenRouter, else Grok/xAI."""
+    load_dotenv(HERMES_ENV)
+    override = os.environ.get("EV_LOOP_PLAN_MODEL") or DEFAULT_PLAN_MODEL
+    or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    xai_key = os.environ.get("XAI_API_KEY", "").strip()
+
+    if override:
+        if override.startswith("anthropic/") or "fable" in override.lower():
+            if not or_key:
+                raise RuntimeError("EV_LOOP_PLAN_MODEL wants OpenRouter but OPENROUTER_API_KEY missing")
+            return "https://openrouter.ai/api/v1", or_key, override
+        if override.startswith("grok") or "xai" in override.lower():
+            if not xai_key:
+                raise RuntimeError("planner model needs XAI_API_KEY")
+            return "https://api.x.ai/v1", xai_key, override.replace("xai/", "")
+        # generic openai-compatible
+        base = os.environ.get("EV_LOOP_PLAN_BASE_URL", "https://api.x.ai/v1")
+        key = os.environ.get("EV_LOOP_PLAN_API_KEY") or xai_key or or_key
+        return base.rstrip("/"), key, override
+
+    if or_key:
+        return "https://openrouter.ai/api/v1", or_key, "anthropic/claude-fable-5.1"
+    if xai_key:
+        # Fable unavailable without OpenRouter — Grok is the planning stand-in
+        return "https://api.x.ai/v1", xai_key, os.environ.get("EV_LOOP_PLAN_FALLBACK", "grok-4.5")
+    raise RuntimeError("No planner credentials (need OPENROUTER_API_KEY for Fable or XAI_API_KEY for Grok)")
+
+
+def openai_chat(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    *,
+    max_tokens: int = 4096,
+    temperature: float = 0.3,
+    timeout: int = 300,
+) -> str:
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/wTaylorBickelmann/ev-purchase-kaggle",
+            "X-Title": "ev-s6e9-autoloop",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"planner HTTP {e.code}: {err[:800]}") from e
+    choices = payload.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"planner empty response: {payload!r}"[:500])
+    msg = choices[0].get("message") or {}
+    content = msg.get("content") or ""
+    # some models put final answer after reasoning
+    if not content and msg.get("reasoning_content"):
+        content = msg["reasoning_content"]
+    return content.strip()
+
+
+def extract_json_object(text: str) -> dict:
+    """Pull first JSON object from model text (fences ok)."""
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fence:
+        return json.loads(fence.group(1))
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(text[start : end + 1])
+    raise ValueError(f"no JSON object in planner output:\n{text[:1000]}")
+
+
+def build_planner_prompt(state: State, new_exp: str, parent: str) -> str:
     parent_cfg = ""
     pcfg = EXPS / parent / "config.json"
     if pcfg.exists():
-        parent_cfg = pcfg.read_text(encoding="utf-8")[:1200]
-    brief = f"""# RUN BRIEF — {new_exp} ← parent {parent}
+        parent_cfg = pcfg.read_text(encoding="utf-8")
+    parent_notes = _tail(EXPS / parent / "NOTES.md", 40)
+    strategy = STRATEGY.read_text(encoding="utf-8") if STRATEGY.exists() else ""
+    learnings = _tail(LEARNINGS, 40)
+    index = INDEX.read_text(encoding="utf-8") if INDEX.exists() else ""
+    strategies = ""
+    sp = ROOT / "STRATEGIES.md"
+    if sp.exists():
+        strategies = sp.read_text(encoding="utf-8")[:6000]
 
-Brain: **DeepSeek-V4-Flash-Q3** via llama-server. Files are memory.
+    return f"""You are the PLANNER for a Kaggle playground-series-s6e9 ROC-AUC experiment factory.
+You do NOT write code. You output ONE JSON plan for the executor.
 
-## Mission
-One change in `exps/{new_exp}/` to beat CV **{state.best_cv_str}** (gate {state.best_cv:.8f}).
+## Goal
+Propose exactly ONE experiment change for `{new_exp}` (parent `{parent}`) to beat best CV **{state.best_cv_str}** (gate {state.best_cv:.8f}).
+Target public north star ~0.94672 (Deotte). Prefer structural ideas over hyperparam jitter.
 
-## Edit only
-- `exps/{new_exp}/config.json`
-- `exps/{new_exp}/NOTES.md`
-- `src/ev_s6e9/**` only if a new flag/capability is required (minimal)
+## Hard rules
+- Do not change metric (ROC-AUC) or default fold protocol (n=5 stratified) unless STRATEGY explicitly allows.
+- Do not peek test labels.
+- Skip ideas already killed in LEARNINGS / index for the same substance.
+- Prefer top unchecked item in STRATEGY queue when still valid.
+- If the change needs new library capability, set needs_code=true and give precise code_instructions.
+- If config-only (train_args / strategy flags already exist), needs_code=false and fill config completely.
 
-## Do not
-- Train full data / Kaggle submit / edit other keep exps / change folds/metric
-- Orchestrator runs: `python scripts/run_exp.py {new_exp}`
+## Output
+Return ONLY a JSON object (no prose outside JSON) with this shape:
+{{
+  "title": "short-slug",
+  "hypothesis": "one sentence",
+  "rationale": "why this vs alternatives",
+  "one_change": "single concrete change",
+  "needs_code": false,
+  "code_instructions": "empty string OR precise steps/files/APIs to add",
+  "files_to_edit": ["exps/{new_exp}/config.json", "exps/{new_exp}/NOTES.md"],
+  "config": {{
+    "id": "{new_exp}",
+    "title": "short-slug",
+    "hypothesis": "one sentence",
+    "parent": "{parent}",
+    "strategy": "deotte",
+    "train_args": ["--strategy", "deotte", "--note", "{new_exp}: ..."],
+    "predict_args": ["--strategy", "deotte"],
+    "submit_message": "{new_exp}",
+    "folds": 5,
+    "seed": 42,
+    "status": "wip"
+  }},
+  "notes_md": "# {new_exp}\\n\\n**Hypothesis:** ...\\n\\n**Change:** ...\\n",
+  "executor_checklist": ["verify train_args differ from parent", "stop after edits"]
+}}
 
-## config.json must set
-id, title, hypothesis (ONE change), parent, strategy or train_args, folds=5, seed, status=wip
+## STRATEGY.md
+{strategy}
 
-## STRATEGY queue (read full STRATEGY.md on disk)
-{strategy_q or "(see STRATEGY.md)"}
+## STRATEGIES.md (implementation reference)
+{strategies}
 
 ## LEARNINGS (tail)
-{learnings_tail}
+{learnings}
 
-## reports/index.md (tail)
-{index_tail}
+## reports/index.md
+{index}
 
 ## Parent config
-```json
 {parent_cfg}
-```
 
-Also read `exps/{parent}/NOTES.md`. Then implement the single change and **stop**.
+## Parent NOTES
+{parent_notes}
 """
-    BRIEF_PATH.write_text(brief, encoding="utf-8")
-    return BRIEF_PATH
 
 
-def openai_server_ready(base_url: str) -> bool:
+def run_planner(state: State, new_exp: str, parent: str) -> dict:
+    base, key, model = resolve_planner()
+    prompt = build_planner_prompt(state, new_exp, parent)
+    print(f"planner model={model} base={base}", flush=True)
+    t0 = time.time()
+    text = openai_chat(
+        base,
+        key,
+        model,
+        [
+            {
+                "role": "system",
+                "content": "You are a meticulous Kaggle experiment planner. Output valid JSON only.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=4096,
+        temperature=0.2,
+        timeout=300,
+    )
+    print(f"planner done in {time.time() - t0:.1f}s ({len(text)} chars)", flush=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    (LOG_DIR / f"planner_{int(time.time())}.txt").write_text(text, encoding="utf-8")
+    plan = extract_json_object(text)
+    # normalize
+    plan.setdefault("needs_code", False)
+    cfg = plan.get("config") or {}
+    cfg["id"] = new_exp
+    cfg["parent"] = parent
+    cfg["status"] = "wip"
+    if plan.get("title"):
+        cfg.setdefault("title", plan["title"])
+    if plan.get("hypothesis"):
+        cfg.setdefault("hypothesis", plan["hypothesis"])
+    plan["config"] = cfg
+    plan["planner_model"] = model
+    plan["exp_id"] = new_exp
+    PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    md = [
+        f"# ITERATION PLAN — {new_exp}",
+        "",
+        f"**Planner:** `{model}`",
+        f"**Title:** {plan.get('title')}",
+        f"**Hypothesis:** {plan.get('hypothesis')}",
+        f"**One change:** {plan.get('one_change')}",
+        f"**needs_code:** {plan.get('needs_code')}",
+        "",
+        "## Rationale",
+        str(plan.get("rationale") or ""),
+        "",
+        "## Code instructions",
+        str(plan.get("code_instructions") or "(none)"),
+        "",
+        "## Executor checklist",
+    ]
+    for item in plan.get("executor_checklist") or []:
+        md.append(f"- {item}")
+    md += ["", "## config.json", "```json", json.dumps(cfg, indent=2), "```", ""]
+    PLAN_MD.write_text("\n".join(md) + "\n", encoding="utf-8")
+    # compatibility brief for old docs
+    BRIEF_PATH.write_text(
+        f"# RUN BRIEF — see {PLAN_MD.name}\n\nExecutor implements ITERATION_PLAN only. Fresh session.\n",
+        encoding="utf-8",
+    )
+    return plan
+
+
+def apply_plan_files(plan: dict, new_exp: str) -> None:
+    exp_dir = EXPS / new_exp
+    cfg = plan.get("config") or {}
+    cfg["id"] = new_exp
+    (exp_dir / "config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    notes = plan.get("notes_md") or (
+        f"# {new_exp}\n\n**Hypothesis:** {plan.get('hypothesis')}\n\n"
+        f"**Change:** {plan.get('one_change')}\n"
+    )
+    (exp_dir / "NOTES.md").write_text(notes if notes.endswith("\n") else notes + "\n", encoding="utf-8")
+
+
+def clear_qwen_session() -> None:
+    """Force a brand-new Qwen Code session (no long chat resume)."""
+    chats = QWEN_PROJECT / "chats"
+    mem = QWEN_PROJECT / "memory"
+    if chats.exists():
+        shutil.rmtree(chats, ignore_errors=True)
+    if mem.exists():
+        shutil.rmtree(mem, ignore_errors=True)
+    QWEN_PROJECT.mkdir(parents=True, exist_ok=True)
+
+
+def ollama_ready(model: str) -> bool:
     try:
-        req = urllib.request.Request(
-            base_url.rstrip("/") + "/models",
-            headers={"Authorization": "Bearer ollama"},
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            return resp.status == 200 and bool(body)
+        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        names = [m.get("name") for m in data.get("models") or []]
+        return model in names or any(model.split(":")[0] in (n or "") for n in names)
     except Exception:
         return False
 
 
-def model_ready(model: str, base_url: str) -> tuple[bool, str]:
-    if openai_server_ready(base_url):
-        return True, f"server ok at {base_url}"
-    if model.startswith("deepseek-v4") and V4_Q3_DIR.is_dir():
-        shards = list(V4_Q3_DIR.glob("*.gguf"))
-        if len(shards) >= 4:
-            return False, f"GGUF present; start: bash scripts/serve_v4_flash_q3.sh"
-    if shutil.which("ollama"):
-        r = run(["ollama", "list"])
-        if model in (r.stdout or "") and "11434" in base_url:
-            return True, "ollama model present"
-    return False, f"Model/server not ready for {model} at {base_url}"
+def run_executor(
+    plan: dict,
+    new_exp: str,
+    *,
+    model: str,
+    base_url: str,
+    agent_bin: str,
+    timeout: int,
+) -> None:
+    """Fresh Qwen session implements plan (code path)."""
+    clear_qwen_session()
+    if not ollama_ready(model) and "11434" in base_url:
+        raise RuntimeError(f"Ollama model not ready: {model}. Run: ollama pull {model}")
 
+    checklist = "\n".join(f"- {x}" for x in (plan.get("executor_checklist") or []))
+    prompt = f"""FRESH SESSION. You are the EXECUTOR only.
 
-def run_agent(model: str, agent_bin: str, timeout: int, base_url: str, new_exp: str) -> None:
-    """Drive coding agent against local DeepSeek (OpenAI-compatible llama-server).
+Read these files and implement the plan — nothing else:
+1. outputs/ITERATION_PLAN.md
+2. outputs/iteration_plan.json
+3. exps/{new_exp}/config.json (already written by orchestrator — update if plan requires)
+4. exps/{new_exp}/NOTES.md
 
-    Uses Qwen Code CLI as the *harness* only; model id + base_url must be DeepSeek.
-    --safe-mode skips auto-injected project context that blew past ctx limits.
-    """
-    prompt = (
-        f"You are coding against DeepSeek-V4-Flash via local llama-server.\n"
-        f"Read outputs/RUN_BRIEF.md then STRATEGY.md LEARNINGS.md reports/index.md "
-        f"and exps parent notes. Implement ONE change for {new_exp} in exps/{new_exp}/ only. "
-        f"Do not train full data. Do not submit. Stop when config.json + NOTES.md are done."
-    )
+## Mission
+{plan.get('one_change') or plan.get('hypothesis')}
+
+needs_code={plan.get('needs_code')}
+code_instructions:
+{plan.get('code_instructions') or '(config-only; verify files match plan)'}
+
+## Checklist
+{checklist}
+
+## Rules
+- One change only as specified in the plan.
+- Prefer editing exps/{new_exp}/ and minimal src/ev_s6e9/** only if code_instructions say so.
+- Do NOT train full data. Do NOT kaggle submit. Do NOT read the whole repo.
+- When done, stop.
+
+Working directory is the repo root.
+"""
     env = os.environ.copy()
     env.update(
         {
@@ -335,27 +565,15 @@ def run_agent(model: str, agent_bin: str, timeout: int, base_url: str, new_exp: 
             "OPENAI_MODEL": model,
             "EV_S6E9_ROOT": str(ROOT),
             "QWEN_CODE_SUPPRESS_YOLO_WARNING": "1",
-            # pin model for any nested tool that reads env
-            "QWEN_MODEL": model,
         }
     )
-    # -p non-interactive; --safe-mode = no huge repo context dumps;
-    # -y (yolo) required: safe-mode disables settings approvalMode=yolo
-    cmd = [
-        agent_bin,
-        "--safe-mode",
-        "-y",
-        "-m",
-        model,
-        "-o",
-        "text",
-        "-p",
-        prompt,
-    ]
+    # New session: no --continue. YOLO for non-interactive writes.
+    # Avoid --safe-mode so project QWEN.md can help briefly; plan is short.
+    cmd = [agent_bin, "-y", "-m", model, "-o", "text", "-p", prompt]
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"agent_{int(time.time())}.log"
-    print(f"agent log → {log_path}", flush=True)
-    print(f"agent model={model} base_url={base_url} (DeepSeek path)", flush=True)
+    log_path = LOG_DIR / f"executor_{int(time.time())}.log"
+    print(f"executor log → {log_path}", flush=True)
+    print(f"executor model={model} base_url={base_url} (fresh session)", flush=True)
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"cmd: {' '.join(cmd)}\nmodel={model}\nbase_url={base_url}\n\n")
         log.flush()
@@ -366,9 +584,11 @@ def run_agent(model: str, agent_bin: str, timeout: int, base_url: str, new_exp: 
             rc = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             p.kill()
-            raise RuntimeError(f"agent timed out after {timeout}s")
+            # also kill children
+            run(["pkill", "-f", "qwen-code"] )
+            raise RuntimeError(f"executor timed out after {timeout}s")
     if rc != 0:
-        raise RuntimeError(f"agent exited {rc}; see {log_path}")
+        raise RuntimeError(f"executor exited {rc}; see {log_path}")
 
 
 def run_exp(exp_id: str, timeout: int) -> dict:
@@ -431,7 +651,6 @@ def git_push(branch: str) -> None:
 def reject_exp(exp_id: str, accept_sha: str, mode: str) -> None:
     exp_dir = EXPS / exp_id
     if mode == "keep":
-        # mark kill but keep folder for forensics
         cfg_p = exp_dir / "config.json"
         if cfg_p.exists():
             cfg = json.loads(cfg_p.read_text(encoding="utf-8"))
@@ -439,13 +658,10 @@ def reject_exp(exp_id: str, accept_sha: str, mode: str) -> None:
             cfg_p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
         git_commit(f"loop: KILL {exp_id}")
         return
-    # reset code to last accept, drop failed exp dir
     if accept_sha:
         git("reset", "--hard", accept_sha)
     if exp_dir.exists():
-        # if reset didn't remove untracked exp
         shutil.rmtree(exp_dir, ignore_errors=True)
-    # clean other untracked junk except protected
     r = run(["git", "status", "--porcelain", "-u"])
     for line in (r.stdout or "").splitlines():
         path = line[3:].strip()
@@ -498,23 +714,28 @@ def run_predict_submit(cfg: dict, do_submit: bool) -> bool:
 
 
 def main() -> int:
+    load_dotenv(HERMES_ENV)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-iters", type=int, default=10)
-    ap.add_argument("--model", default=DEFAULT_MODEL)
-    ap.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    ap.add_argument("--plan-model", default=os.environ.get("EV_LOOP_PLAN_MODEL", ""), help="empty=auto Fable||Grok")
+    ap.add_argument("--exec-model", default=DEFAULT_EXEC_MODEL)
+    ap.add_argument("--exec-base-url", default=DEFAULT_EXEC_BASE)
     ap.add_argument("--agent", default=DEFAULT_AGENT)
-    ap.add_argument("--agent-timeout", type=int, default=7200)
+    ap.add_argument("--agent-timeout", type=int, default=3600, help="executor timeout (s)")
     ap.add_argument("--train-timeout", type=int, default=10800)
     ap.add_argument("--min-delta", type=float, default=1e-4)
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--branch", default=BRANCH)
     ap.add_argument("--on-reject", choices=["reset", "keep"], default="reset")
-    ap.add_argument("--no-agent", action="store_true", help="use existing WIP exp (latest) without agent")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-executor", action="store_true", help="apply plan config only; skip Qwen")
+    ap.add_argument("--force-executor", action="store_true", help="always run Qwen even if needs_code=false")
+    ap.add_argument("--dry-run", action="store_true", help="plan only for next exp")
     ap.add_argument("--stop-after-no-improve", type=int, default=8)
     ap.add_argument("--target-cv", type=float, default=0.94672)
     args = ap.parse_args()
+    if args.plan_model:
+        os.environ["EV_LOOP_PLAN_MODEL"] = args.plan_model
 
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -523,17 +744,25 @@ def main() -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if not (EXPS / "exp0000" / "config.json").exists():
-        print("missing exps/exp0000 — seed baseline first", file=sys.stderr)
+        print("missing exps/exp0000", file=sys.stderr)
         return 2
 
-    if not args.dry_run and not args.no_agent:
+    # planner creds check early
+    try:
+        base, _, model = resolve_planner()
+        print(f"planner ready: {model} @ {base}", flush=True)
+    except Exception as e:
+        print(f"planner not configured: {e}", file=sys.stderr)
+        return 2
+
+    if not args.dry_run and not args.no_executor:
         if shutil.which(args.agent) is None:
             print(f"agent not found: {args.agent}", file=sys.stderr)
             return 2
-        ok, hint = model_ready(args.model, args.base_url)
-        print(hint, flush=True)
-        if not ok:
+        if "11434" in args.exec_base_url and not ollama_ready(args.exec_model):
+            print(f"pull executor model: ollama pull {args.exec_model}", file=sys.stderr)
             return 2
+        print(f"executor ready: {args.exec_model} @ {args.exec_base_url}", flush=True)
 
     try:
         ensure_branch(args.branch)
@@ -541,9 +770,9 @@ def main() -> int:
         print(f"git: {e}", file=sys.stderr)
 
     state = State.load(STATE_PATH)
-    bcv, bcs, bexp = best_from_index_and_exps()
+    bcv, bcs, bexp = best_from_exps()
     state.best_cv = max(state.best_cv, bcv, DEFAULT_BEST)
-    if not state.best_cv_str or state.best_cv == bcv:
+    if not state.best_cv_str or abs(state.best_cv - bcv) < 1e-12:
         state.best_cv_str = bcs or f"{state.best_cv:.5f}"
     state.best_exp = bexp or state.best_exp or "exp0000"
     state.branch = args.branch
@@ -562,7 +791,7 @@ def main() -> int:
     for _ in range(args.max_iters):
         state = State.load(STATE_PATH)
         if state.stop == "1":
-            print("stop=1 in loop_state.json")
+            print("stop=1")
             break
         state.iteration += 1
         it = state.iteration
@@ -570,47 +799,102 @@ def main() -> int:
         new_id = next_exp_id()
         print(f"\n======== ITERATION {it} {parent} → {new_id} ========", flush=True)
 
-        if args.no_agent:
-            # assume latest wip exists
-            exps = list_exps()
-            new_id = exps[-1].name if exps else new_id
-        else:
-            copy_exp(parent, new_id)
-            write_brief(state, new_id, parent)
-            print(f"wrote {BRIEF_PATH} and {EXPS / new_id}", flush=True)
-
-        if args.dry_run:
-            write_brief(state, new_id, parent)
-            print("dry-run: stop after copy+brief")
-            state.save(STATE_PATH)
-            return 0
-
+        copy_exp(parent, new_id)
         pre_sha = head_sha()
         try:
-            if not args.no_agent:
-                run_agent(args.model, args.agent, args.agent_timeout, args.base_url, new_id)
-            # ensure config id
-            cfg_p = EXPS / new_id / "config.json"
-            cfg = json.loads(cfg_p.read_text(encoding="utf-8"))
-            cfg["id"] = new_id
-            cfg["parent"] = parent
-            cfg_p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-            met = run_exp(new_id, args.train_timeout)
+            plan = run_planner(state, new_id, parent)
+            apply_plan_files(plan, new_id)
+            print(f"plan: {plan.get('title')} | needs_code={plan.get('needs_code')}", flush=True)
         except Exception as e:
-            print(f"agent/train failed: {e}", file=sys.stderr)
+            print(f"planner failed: {e}", file=sys.stderr)
             day = datetime.now(timezone.utc).date().isoformat()
-            append_learning(f"- {day} {new_id}: FAILED — {e}")
-            append_index(
-                f"| {new_id} | failed | — | — | kill | {str(e)[:60]} |"
-            )
+            append_learning(f"- {day} {new_id}: PLANNER FAILED — {e}")
+            append_index(f"| {new_id} | planner-fail | — | — | kill | {str(e)[:60]} |")
             state.rejects += 1
             state.no_improve_streak += 1
             reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
             state.save(STATE_PATH)
-            if args.push and args.on_reject == "keep":
-                git_push(args.branch)
             if state.no_improve_streak >= args.stop_after_no_improve:
-                print("stop: no-improve streak")
+                break
+            continue
+
+        if args.dry_run:
+            print(f"dry-run: wrote {PLAN_JSON} and {PLAN_MD}; stop")
+            state.iteration -= 1  # don't count dry-run
+            # leave exp folder for inspection
+            state.save(STATE_PATH)
+            return 0
+
+        need_exec = bool(plan.get("needs_code")) or args.force_executor
+        if need_exec and not args.no_executor:
+            try:
+                run_executor(
+                    plan,
+                    new_id,
+                    model=args.exec_model,
+                    base_url=args.exec_base_url,
+                    agent_bin=args.agent,
+                    timeout=args.agent_timeout,
+                )
+            except Exception as e:
+                print(f"executor failed: {e}", file=sys.stderr)
+                day = datetime.now(timezone.utc).date().isoformat()
+                append_learning(f"- {day} {new_id}: EXECUTOR FAILED — {e}")
+                append_index(
+                    f"| {new_id} | {str(plan.get('title') or 'exec-fail').replace('|','/')} | — | — | kill | exec: {str(e)[:40]} |"
+                )
+                state.rejects += 1
+                state.no_improve_streak += 1
+                learn_txt = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else None
+                index_txt = INDEX.read_text(encoding="utf-8") if INDEX.exists() else None
+                plan_j = PLAN_JSON.read_text(encoding="utf-8") if PLAN_JSON.exists() else None
+                plan_m = PLAN_MD.read_text(encoding="utf-8") if PLAN_MD.exists() else None
+                reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
+                if args.on_reject == "reset":
+                    if learn_txt:
+                        LEARNINGS.write_text(learn_txt, encoding="utf-8")
+                    if index_txt:
+                        INDEX.write_text(index_txt, encoding="utf-8")
+                    if plan_j:
+                        PLAN_JSON.write_text(plan_j, encoding="utf-8")
+                    if plan_m:
+                        PLAN_MD.write_text(plan_m, encoding="utf-8")
+                    try:
+                        git_commit(f"loop: KILL {new_id} executor-fail (log only)")
+                    except Exception:
+                        pass
+                state.save(STATE_PATH)
+                if state.no_improve_streak >= args.stop_after_no_improve:
+                    break
+                continue
+        else:
+            print("skip executor (config-only plan)", flush=True)
+
+        try:
+            met = run_exp(new_id, args.train_timeout)
+        except Exception as e:
+            print(f"train failed: {e}", file=sys.stderr)
+            day = datetime.now(timezone.utc).date().isoformat()
+            append_learning(f"- {day} {new_id}: TRAIN FAILED — {e}")
+            append_index(
+                f"| {new_id} | {str(plan.get('title') or 'train-fail').replace('|','/')} | — | — | kill | train: {str(e)[:40]} |"
+            )
+            state.rejects += 1
+            state.no_improve_streak += 1
+            learn_txt = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else None
+            index_txt = INDEX.read_text(encoding="utf-8") if INDEX.exists() else None
+            reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
+            if args.on_reject == "reset":
+                if learn_txt:
+                    LEARNINGS.write_text(learn_txt, encoding="utf-8")
+                if index_txt:
+                    INDEX.write_text(index_txt, encoding="utf-8")
+                try:
+                    git_commit(f"loop: KILL {new_id} train-fail (log only)")
+                except Exception:
+                    pass
+            state.save(STATE_PATH)
+            if state.no_improve_streak >= args.stop_after_no_improve:
                 break
             continue
 
@@ -624,7 +908,7 @@ def main() -> int:
         )
 
         cfg = json.loads((EXPS / new_id / "config.json").read_text(encoding="utf-8"))
-        title = str(cfg.get("title") or cfg.get("hypothesis") or new_id)[:80]
+        title = str(cfg.get("title") or plan.get("title") or new_id)[:80]
         day = datetime.now(timezone.utc).date().isoformat()
 
         if improved:
@@ -634,13 +918,11 @@ def main() -> int:
             (EXPS / new_id / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
             met["status"] = "keep"
             (EXPS / new_id / "metrics.json").write_text(json.dumps(met, indent=2) + "\n")
-
             submitted = False
             if args.submit:
                 submitted = run_predict_submit(cfg, do_submit=True)
                 if submitted:
                     state.submits += 1
-
             append_index(
                 f"| {new_id} | {title.replace('|','/')} | {cv_s} | "
                 f"{'pending' if submitted else '—'} | **keep** | parent={parent} |"
@@ -652,9 +934,6 @@ def main() -> int:
             state.no_improve_streak = 0
             sha = git_commit(f"loop: KEEP {new_id} CV={mean:.5f}" + (" +submit" if submitted else ""))
             state.accept_sha = sha
-            (OUT / "best_cv.json").write_text(
-                json.dumps({"exp": new_id, "mean": mean, "cv": cv_s}, indent=2) + "\n"
-            )
             if args.push:
                 git_push(args.branch)
             print(f"KEEP {new_id} sha={sha[:12]}", flush=True)
@@ -672,7 +951,6 @@ def main() -> int:
             )
             state.rejects += 1
             state.no_improve_streak += 1
-            # preserve LEARNINGS + index even on reset: copy out, reset, copy back
             learn_txt = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else None
             index_txt = INDEX.read_text(encoding="utf-8") if INDEX.exists() else None
             reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
@@ -681,7 +959,6 @@ def main() -> int:
                     LEARNINGS.write_text(learn_txt, encoding="utf-8")
                 if index_txt:
                     INDEX.write_text(index_txt, encoding="utf-8")
-                # commit learnings/index so they persist
                 try:
                     git_commit(f"loop: KILL {new_id} CV={mean:.5f} (log only)")
                 except Exception:
