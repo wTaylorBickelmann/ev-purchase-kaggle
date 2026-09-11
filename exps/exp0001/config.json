@@ -1,0 +1,25 @@
+{
+  "id": "exp0001",
+  "title": "deotte-freq-income-commute",
+  "hypothesis": "Train+test value-count features for Annual_Income_USD and Daily_Commute_km lift the Deotte 3xXGB blend CV by >= 0.0001",
+  "parent": "exp0000",
+  "strategy": "deotte",
+  "train_args": [
+    "--strategy",
+    "deotte",
+    "--freq",
+    "--note",
+    "exp0001: +freq-encoded income/commute (train+test value counts) in Deotte blend"
+  ],
+  "predict_args": [
+    "--strategy",
+    "deotte"
+  ],
+  "submit_message": "exp0001 deotte + freq income/commute",
+  "folds": 5,
+  "seed": 42,
+  "status": "keep",
+  "cv_mean": 0.9433273484377246,
+  "cv_std": 0.0006981629884156993,
+  "cv": "0.94333 \u00b1 0.00070"
+}

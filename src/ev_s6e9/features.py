@@ -10,6 +10,8 @@ from ev_s6e9.schema import CAT_COLS, FEATURE_COLS, ID_COL, NUM_COLS, TARGET, che
 
 HELPER_COLS = ["worry_score", "chargers_total", "income_x_subsidy", "concern_x_subsidy"]
 RECIPE_COL = "recipe_score"
+FREQ_COLS = ["Annual_Income_USD", "Daily_Commute_km"]
+FREQ_SUFFIX = "_cnt"
 
 
 def encode_target(s: pd.Series) -> pd.Series:
@@ -53,8 +55,10 @@ def _yes(s: pd.Series) -> pd.Series:
 class FeatureBuilder:
     """Deotte Fable 5.1: helper features, recipe score/logit, category codes."""
 
-    def __init__(self) -> None:
+    def __init__(self, freq: bool = False) -> None:
+        self.freq = freq
         self._cat_dtypes: dict[str, pd.CategoricalDtype] = {}
+        self._freq_maps: dict[str, pd.Series] = {}
         self._fitted = False
 
     def fit(self, train: pd.DataFrame, test: pd.DataFrame | None = None) -> FeatureBuilder:
@@ -65,6 +69,9 @@ class FeatureBuilder:
         for c in CAT_COLS:
             cats = combined[c].astype("string").dropna().unique()
             self._cat_dtypes[c] = pd.CategoricalDtype(categories=sorted(cats))
+        if self.freq:
+            for c in FREQ_COLS:
+                self._freq_maps[c] = pd.to_numeric(combined[c], errors="coerce").value_counts()
         self._fitted = True
         return self
 
@@ -121,6 +128,10 @@ class FeatureBuilder:
             x[c] = df[c].astype("string").astype(self._cat_dtypes[c]).cat.codes.astype(np.int16)
         for c in HELPER_COLS:
             x[c] = helpers[c]
+        if self.freq:
+            for c in FREQ_COLS:
+                vals = pd.to_numeric(df[c], errors="coerce")
+                x[c + FREQ_SUFFIX] = vals.map(self._freq_maps[c]).fillna(0).astype(np.float32)
         if with_recipe:
             x[RECIPE_COL] = self.recipe_score(df)
         return x
