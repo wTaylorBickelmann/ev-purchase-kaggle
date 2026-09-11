@@ -339,10 +339,12 @@ def run_agent(model: str, agent_bin: str, timeout: int, base_url: str, new_exp: 
             "QWEN_MODEL": model,
         }
     )
-    # -p non-interactive; --safe-mode = no huge repo context dumps; fresh session (no -c)
+    # -p non-interactive; --safe-mode = no huge repo context dumps;
+    # -y (yolo) required: safe-mode disables settings approvalMode=yolo
     cmd = [
         agent_bin,
         "--safe-mode",
+        "-y",
         "-m",
         model,
         "-o",
