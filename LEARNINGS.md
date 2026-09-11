@@ -10,3 +10,5 @@ Template:
 ---
 
 - (seed) 2026-09-10: bare hyperparam jitter without structural change is low-EV on this AUC plateau
+- 2026-09-10: agent without `-y` under `--safe-mode` cannot write files (approval blocked) — fixed in autoloop
+- 2026-09-10 exp0001 attempts: cloning baseline with no config change → same CV 0.94210 — kill; must change train_args
