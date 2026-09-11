@@ -34,3 +34,15 @@ bash logs/loop/start_autoloop.sh
 - Fable is strong at “what next” given STRATEGY/LEARNINGS/index.
 - Qwen is weak on long coding threads → wipe chats each iter; feed only `NEXT_STRATEGY.md`.
 - Cursor already has Fable on your account (no OpenRouter key required).
+
+## Durable logging (no overwrite)
+
+| Path | What |
+|------|------|
+| `reports/plans/{exp}_{ts}_{title}/` | Full plan snapshot every iter |
+| `reports/plans/INDEX.md` | Catalog of plans |
+| `reports/kills/{exp}_{ts}_{title}/` | Killed exp config + metrics + plan |
+| `reports/kills/INDEX.md` | Catalog of kills |
+| `LEARNINGS.md` / `reports/index.md` / `EXPERIMENTS.md` | Restored after kill reset |
+
+Live `outputs/NEXT_STRATEGY.md` is only the **current** pointer for Qwen; history is under `reports/plans/`.

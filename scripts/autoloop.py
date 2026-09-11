@@ -50,6 +50,11 @@ PLAN_MD = OUT / "ITERATION_PLAN.md"
 BRIEF_PATH = OUT / "RUN_BRIEF.md"  # kept for compatibility (points at plan)
 LOG_DIR = ROOT / "logs" / "loop"
 VENV_PY = ROOT / ".venv" / "bin" / "python"
+# Durable archives (under reports/ so git tracks them; outputs/ is gitignored)
+PLANS_DIR = REPORTS / "plans"
+KILLS_DIR = REPORTS / "kills"
+EXPERIMENTS_MD = ROOT / "EXPERIMENTS.md"
+NEXT_STRATEGY = OUT / "NEXT_STRATEGY.md"  # live pointer for Qwen (also archived each iter)
 
 # Executor defaults: local Qwen 27B (user: ~28B class)
 DEFAULT_EXEC_MODEL = os.environ.get("EV_LOOP_EXEC_MODEL", "qwen3.8:27b-q4_K_M")
@@ -64,7 +69,6 @@ DEFAULT_PLAN_MODEL = os.environ.get(
 DEFAULT_CURSOR_AGENT = os.environ.get("EV_LOOP_CURSOR_AGENT", str(Path.home() / ".local" / "bin" / "agent"))
 DEFAULT_BEST = 0.94210
 BRANCH = "loop/auto"
-NEXT_STRATEGY = OUT / "NEXT_STRATEGY.md"  # Fable writes this each iter for Qwen
 
 HERMES_ENV = Path.home() / ".hermes" / ".env"
 QWEN_PROJECT = (
@@ -83,7 +87,7 @@ KEEP_ON_CLEAN = {
     ".pytest_cache",
     "__pycache__",
     "exps",
-    "reports",
+    "reports",  # includes plans/ + kills/ archives
 }
 
 
@@ -255,6 +259,205 @@ def _tail(path: Path, n: int) -> str:
         return "(missing)"
     lines = path.read_text(encoding="utf-8").splitlines()
     return "\n".join(lines if len(lines) <= n else lines[-n:])
+
+
+def _safe_slug(s: str, n: int = 40) -> str:
+    s = re.sub(r"[^\w\-]+", "-", (s or "x").strip().lower())
+    return (s.strip("-") or "x")[:n]
+
+
+def snapshot_durable() -> dict[str, str]:
+    """Files that must survive git reset --hard on kill."""
+    out: dict[str, str] = {}
+    for key, path in (
+        ("learnings", LEARNINGS),
+        ("index", INDEX),
+        ("experiments", EXPERIMENTS_MD),
+        ("plans_index", PLANS_DIR / "INDEX.md"),
+        ("kills_index", KILLS_DIR / "INDEX.md"),
+    ):
+        if path.exists():
+            out[key] = path.read_text(encoding="utf-8")
+    return out
+
+
+def restore_durable(snap: dict[str, str]) -> None:
+    mapping = {
+        "learnings": LEARNINGS,
+        "index": INDEX,
+        "experiments": EXPERIMENTS_MD,
+        "plans_index": PLANS_DIR / "INDEX.md",
+        "kills_index": KILLS_DIR / "INDEX.md",
+    }
+    for key, path in mapping.items():
+        if key not in snap:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(snap[key], encoding="utf-8")
+
+
+def _append_archive_index(index_path: Path, row: str, header: str) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    if not index_path.exists():
+        index_path.write_text(header, encoding="utf-8")
+    text = index_path.read_text(encoding="utf-8")
+    if not text.endswith("\n"):
+        text += "\n"
+    index_path.write_text(text + row + "\n", encoding="utf-8")
+
+
+def archive_plan(exp_id: str, plan: dict | None = None, *, label: str = "") -> Path:
+    """Write a permanent copy of the current plan under reports/plans/ (never overwrite)."""
+    PLANS_DIR.mkdir(parents=True, exist_ok=True)
+    title = ""
+    if plan:
+        title = str(plan.get("title") or "")
+    if not title and PLAN_JSON.exists():
+        try:
+            title = str(json.loads(PLAN_JSON.read_text(encoding="utf-8")).get("title") or "")
+        except Exception:
+            title = ""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    slug = _safe_slug(label or title or "plan")
+    dest = PLANS_DIR / f"{exp_id}_{ts}_{slug}"
+    # uniqueness if same-second collision
+    i = 1
+    base = dest
+    while dest.exists():
+        dest = Path(str(base) + f"_{i}")
+        i += 1
+    dest.mkdir(parents=True, exist_ok=False)
+
+    for src, name in (
+        (NEXT_STRATEGY, "NEXT_STRATEGY.md"),
+        (PLAN_MD, "ITERATION_PLAN.md"),
+        (PLAN_JSON, "iteration_plan.json"),
+        (BRIEF_PATH, "RUN_BRIEF.md"),
+    ):
+        if src.exists():
+            shutil.copy2(src, dest / name)
+    if plan is not None:
+        (dest / "iteration_plan.json").write_text(
+            json.dumps(plan, indent=2) + "\n", encoding="utf-8"
+        )
+        if plan.get("notes_md"):
+            (dest / "notes_md.md").write_text(str(plan["notes_md"]), encoding="utf-8")
+    meta = {
+        "exp_id": exp_id,
+        "title": title,
+        "archived_at": datetime.now(timezone.utc).isoformat(),
+        "label": label,
+        "planner_model": (plan or {}).get("planner_model"),
+        "planner_backend": (plan or {}).get("planner_backend"),
+        "needs_code": (plan or {}).get("needs_code"),
+        "dir": str(dest.relative_to(ROOT)),
+    }
+    (dest / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    (PLANS_DIR / "LATEST").write_text(str(dest.relative_to(ROOT)) + "\n", encoding="utf-8")
+    _append_archive_index(
+        PLANS_DIR / "INDEX.md",
+        f"| {ts} | {exp_id} | {title.replace('|', '/') or '—'} | `{dest.relative_to(ROOT)}` |",
+        "# Plan archive\n\n| when (UTC) | exp | title | path |\n|------------|-----|-------|------|\n",
+    )
+    print(f"archived plan → {dest.relative_to(ROOT)}", flush=True)
+    return dest
+
+
+def archive_kill(
+    exp_id: str,
+    *,
+    plan: dict | None = None,
+    metrics: dict | None = None,
+    reason: str = "kill",
+    plan_dir: Path | None = None,
+) -> Path:
+    """Snapshot killed exp artifacts under reports/kills/ (never overwrite)."""
+    KILLS_DIR.mkdir(parents=True, exist_ok=True)
+    title = str((plan or {}).get("title") or (metrics or {}).get("id") or exp_id)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = KILLS_DIR / f"{exp_id}_{ts}_{_safe_slug(title)}"
+    i = 1
+    base = dest
+    while dest.exists():
+        dest = Path(str(base) + f"_{i}")
+        i += 1
+    dest.mkdir(parents=True, exist_ok=False)
+
+    exp_dir = EXPS / exp_id
+    if exp_dir.is_dir():
+        for name in ("config.json", "NOTES.md", "metrics.json", "cv.json", "oof.csv"):
+            p = exp_dir / name
+            if p.exists():
+                shutil.copy2(p, dest / name)
+    for src, name in (
+        (NEXT_STRATEGY, "NEXT_STRATEGY.md"),
+        (PLAN_JSON, "iteration_plan.json"),
+        (PLAN_MD, "ITERATION_PLAN.md"),
+        (OUT / "cv.json", "outputs_cv.json"),
+    ):
+        if src.exists():
+            shutil.copy2(src, dest / name)
+    if plan is not None:
+        (dest / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    if metrics is not None:
+        (dest / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    if plan_dir and plan_dir.exists():
+        (dest / "plan_archive_path.txt").write_text(
+            str(plan_dir.relative_to(ROOT)) + "\n", encoding="utf-8"
+        )
+    meta = {
+        "exp_id": exp_id,
+        "title": title,
+        "reason": reason,
+        "archived_at": datetime.now(timezone.utc).isoformat(),
+        "cv": (metrics or {}).get("cv"),
+        "cv_mean": (metrics or {}).get("cv_mean"),
+        "dir": str(dest.relative_to(ROOT)),
+    }
+    (dest / "kill_meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    (KILLS_DIR / "LATEST").write_text(str(dest.relative_to(ROOT)) + "\n", encoding="utf-8")
+    cv_s = str((metrics or {}).get("cv") or (metrics or {}).get("cv_mean") or "—")
+    _append_archive_index(
+        KILLS_DIR / "INDEX.md",
+        f"| {ts} | {exp_id} | {title.replace('|', '/')} | {cv_s} | {reason} | `{dest.relative_to(ROOT)}` |",
+        "# Kill archive\n\n| when (UTC) | exp | title | CV | reason | path |\n|------------|-----|-------|----|--------|------|\n",
+    )
+    print(f"archived kill → {dest.relative_to(ROOT)}", flush=True)
+    return dest
+
+
+def finalize_kill(
+    exp_id: str,
+    accept_sha: str,
+    on_reject: str,
+    *,
+    plan: dict | None = None,
+    metrics: dict | None = None,
+    reason: str = "kill",
+    plan_dir: Path | None = None,
+    commit_msg: str = "",
+) -> None:
+    """Archive kill bundle, reset tree if needed, restore durable logs, commit."""
+    snap = snapshot_durable()
+    try:
+        kill_dir = archive_kill(
+            exp_id, plan=plan, metrics=metrics, reason=reason, plan_dir=plan_dir
+        )
+        snap = snapshot_durable()  # include new kills index
+    except Exception as e:
+        print(f"kill archive failed: {e}", file=sys.stderr)
+        kill_dir = None
+    reject_exp(exp_id, accept_sha, on_reject)
+    if on_reject == "reset":
+        restore_durable(snap)
+        # re-copy kill dir is already on disk under reports/kills (kept)
+        msg = commit_msg or f"loop: KILL {exp_id} ({reason})"
+        try:
+            git_commit(msg)
+        except Exception:
+            pass
+    if kill_dir:
+        print(f"kill forensics: {kill_dir.relative_to(ROOT)}", flush=True)
 
 
 def resolve_api_planner() -> tuple[str, str, str]:
@@ -477,8 +680,14 @@ def run_planner_cursor(
 ) -> dict:
     if shutil.which(agent_bin) is None and not Path(agent_bin).exists():
         raise RuntimeError(f"Cursor agent not found: {agent_bin}")
-    # clear prior plan artifacts so we don't accept stale JSON
-    for p in (PLAN_JSON, PLAN_MD, NEXT_STRATEGY):
+    # Archive any previous live plan before replacing (never lose history)
+    if NEXT_STRATEGY.exists() or PLAN_JSON.exists() or PLAN_MD.exists():
+        try:
+            archive_plan(f"_prior_{new_exp}", None, label="pre-replace")
+        except Exception as e:
+            print(f"prior plan archive skipped: {e}", file=sys.stderr)
+    # Clear live pointers only (archives already saved)
+    for p in (PLAN_JSON, PLAN_MD, NEXT_STRATEGY, BRIEF_PATH):
         if p.exists():
             p.unlink()
     prompt = build_cursor_planner_prompt(state, new_exp, parent)
@@ -527,9 +736,15 @@ def run_planner_cursor(
     PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     BRIEF_PATH.write_text(
         f"# RUN BRIEF\n\nPlanner: Cursor `{model}`\n\n"
-        f"Executor: read `outputs/NEXT_STRATEGY.md` + `iteration_plan.json`.\n",
+        f"Executor: read `outputs/NEXT_STRATEGY.md` + `iteration_plan.json`.\n"
+        f"Full archive: see `reports/plans/` (never overwritten).\n",
         encoding="utf-8",
     )
+    arch = archive_plan(new_exp, plan, label="cursor")
+    plan["archive_dir"] = str(arch.relative_to(ROOT))
+    PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    # refresh archive copy with archive_dir field
+    (arch / "iteration_plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     return plan
 
 
@@ -594,6 +809,10 @@ config.id={new_exp} config.parent={parent} config.status=wip.
     ]
     NEXT_STRATEGY.write_text("\n".join(md) + "\n", encoding="utf-8")
     PLAN_MD.write_text(NEXT_STRATEGY.read_text(encoding="utf-8"), encoding="utf-8")
+    arch = archive_plan(new_exp, plan, label="api")
+    plan["archive_dir"] = str(arch.relative_to(ROOT))
+    PLAN_JSON.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    (arch / "iteration_plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     return plan
 
 
@@ -973,14 +1192,24 @@ def main() -> int:
             append_index(f"| {new_id} | planner-fail | — | — | kill | {str(e)[:60]} |")
             state.rejects += 1
             state.no_improve_streak += 1
-            reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
+            finalize_kill(
+                new_id,
+                state.accept_sha or pre_sha,
+                args.on_reject,
+                reason="planner-fail",
+                commit_msg=f"loop: KILL {new_id} planner-fail (log only)",
+            )
             state.save(STATE_PATH)
             if state.no_improve_streak >= args.stop_after_no_improve:
                 break
             continue
 
+        plan_dir = None
+        if plan.get("archive_dir"):
+            plan_dir = ROOT / str(plan["archive_dir"])
+
         if args.dry_run:
-            print(f"dry-run: wrote {NEXT_STRATEGY} / {PLAN_JSON}; stop")
+            print(f"dry-run: wrote {NEXT_STRATEGY} / {PLAN_JSON}; archived under reports/plans/; stop")
             state.iteration -= 1  # don't count dry-run
             state.save(STATE_PATH)
             return 0
@@ -1005,24 +1234,15 @@ def main() -> int:
                 )
                 state.rejects += 1
                 state.no_improve_streak += 1
-                learn_txt = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else None
-                index_txt = INDEX.read_text(encoding="utf-8") if INDEX.exists() else None
-                plan_j = PLAN_JSON.read_text(encoding="utf-8") if PLAN_JSON.exists() else None
-                plan_m = PLAN_MD.read_text(encoding="utf-8") if PLAN_MD.exists() else None
-                reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
-                if args.on_reject == "reset":
-                    if learn_txt:
-                        LEARNINGS.write_text(learn_txt, encoding="utf-8")
-                    if index_txt:
-                        INDEX.write_text(index_txt, encoding="utf-8")
-                    if plan_j:
-                        PLAN_JSON.write_text(plan_j, encoding="utf-8")
-                    if plan_m:
-                        PLAN_MD.write_text(plan_m, encoding="utf-8")
-                    try:
-                        git_commit(f"loop: KILL {new_id} executor-fail (log only)")
-                    except Exception:
-                        pass
+                finalize_kill(
+                    new_id,
+                    state.accept_sha or pre_sha,
+                    args.on_reject,
+                    plan=plan,
+                    reason="executor-fail",
+                    plan_dir=plan_dir,
+                    commit_msg=f"loop: KILL {new_id} executor-fail (log only)",
+                )
                 state.save(STATE_PATH)
                 if state.no_improve_streak >= args.stop_after_no_improve:
                     break
@@ -1041,18 +1261,15 @@ def main() -> int:
             )
             state.rejects += 1
             state.no_improve_streak += 1
-            learn_txt = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else None
-            index_txt = INDEX.read_text(encoding="utf-8") if INDEX.exists() else None
-            reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
-            if args.on_reject == "reset":
-                if learn_txt:
-                    LEARNINGS.write_text(learn_txt, encoding="utf-8")
-                if index_txt:
-                    INDEX.write_text(index_txt, encoding="utf-8")
-                try:
-                    git_commit(f"loop: KILL {new_id} train-fail (log only)")
-                except Exception:
-                    pass
+            finalize_kill(
+                new_id,
+                state.accept_sha or pre_sha,
+                args.on_reject,
+                plan=plan,
+                reason="train-fail",
+                plan_dir=plan_dir,
+                commit_msg=f"loop: KILL {new_id} train-fail (log only)",
+            )
             state.save(STATE_PATH)
             if state.no_improve_streak >= args.stop_after_no_improve:
                 break
@@ -1078,6 +1295,13 @@ def main() -> int:
             (EXPS / new_id / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
             met["status"] = "keep"
             (EXPS / new_id / "metrics.json").write_text(json.dumps(met, indent=2) + "\n")
+            # archive keep plan/metrics too
+            try:
+                keep_arch = archive_plan(new_id, {**plan, "metrics": met, "verdict": "keep"}, label="keep")
+                # also copy metrics into plan archive
+                (keep_arch / "metrics.json").write_text(json.dumps(met, indent=2) + "\n", encoding="utf-8")
+            except Exception as e:
+                print(f"keep archive warn: {e}", file=sys.stderr)
             submitted = False
             if args.submit:
                 submitted = run_predict_submit(cfg, do_submit=True)
@@ -1111,18 +1335,16 @@ def main() -> int:
             )
             state.rejects += 1
             state.no_improve_streak += 1
-            learn_txt = LEARNINGS.read_text(encoding="utf-8") if LEARNINGS.exists() else None
-            index_txt = INDEX.read_text(encoding="utf-8") if INDEX.exists() else None
-            reject_exp(new_id, state.accept_sha or pre_sha, args.on_reject)
-            if args.on_reject == "reset":
-                if learn_txt:
-                    LEARNINGS.write_text(learn_txt, encoding="utf-8")
-                if index_txt:
-                    INDEX.write_text(index_txt, encoding="utf-8")
-                try:
-                    git_commit(f"loop: KILL {new_id} CV={mean:.5f} (log only)")
-                except Exception:
-                    pass
+            finalize_kill(
+                new_id,
+                state.accept_sha or pre_sha,
+                args.on_reject,
+                plan=plan,
+                metrics=met,
+                reason="cv-gate",
+                plan_dir=plan_dir,
+                commit_msg=f"loop: KILL {new_id} CV={mean:.5f} (log only)",
+            )
             if args.push:
                 git_push(args.branch)
             print(f"KILL {new_id}", flush=True)
