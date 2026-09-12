@@ -1,0 +1,85 @@
+{
+  "title": "deotte-te-income",
+  "hypothesis": "Fold-safe smoothed target encoding of the exact Annual_Income_USD value, added to all three Deotte XGBs on top of --freq, lifts blend CV by >= 0.0001.",
+  "rationale": "Queue items 1-3 are killed (ensemble saturated: +0.00000..+0.00003). Item 5 (TE) never got a CV score - it timed out twice on oversized plans, so retry with a minimal plan. Read-only EDA shows 68% of rows carry an income value with count >= 100, and those spike values have value-specific target rates that are not smooth in income (68480 -> 0.270, 65800 -> 0.065, 72441 -> 0.036, 131789 -> 0.353). --freq only flags 'is a spike'; hist XGB with 256 bins cannot isolate 14.6k exact values. TE gives trees the per-value rate directly. Income only; commute spike rates are flat (0.14-0.19).",
+  "one_change": "Add --te flag: extra column Annual_Income_USD_te = smoothed (m=20) target mean per exact income value; train rows use nested 5-fold OOF TE inside the outer train fold, val/test rows use the map fit on the whole outer train fold (stored on each fold model as te_map_).",
+  "needs_code": true,
+  "code_instructions": "features.py: add te_fit/te_apply/te_oof helpers + TE_COL, FeatureBuilder(freq, te) attr. deotte.py: in _fit_fold, if fb.te add Annual_Income_USD_te (te_oof for x_tr, te_apply with full-fold map for x_va, stash m.te_map_=(mp,prior)); _predict_variant applies each model's te_map_; thread te kwarg run_cv/train -> FeatureBuilder(freq=freq, te=te). __main__.py: --te flag, pass te=args.te. Smoke with --synth. Details in NEXT_STRATEGY.md.",
+  "files_to_edit": [
+    "src/ev_s6e9/features.py",
+    "src/ev_s6e9/deotte.py",
+    "src/ev_s6e9/__main__.py",
+    "exps/exp0010/config.json",
+    "exps/exp0010/NOTES.md"
+  ],
+  "config": {
+    "id": "exp0010",
+    "title": "deotte-te-income",
+    "hypothesis": "Fold-safe smoothed target encoding of the exact Annual_Income_USD value, added to all three Deotte XGBs on top of --freq, lifts blend CV by >= 0.0001.",
+    "parent": "exp0001",
+    "strategy": "deotte",
+    "train_args": [
+      "--strategy",
+      "deotte",
+      "--freq",
+      "--te",
+      "--note",
+      "exp0010: +fold-safe smoothed TE (m=20, nested OOF) of exact Annual_Income_USD on top of --freq"
+    ],
+    "predict_args": [
+      "--strategy",
+      "deotte"
+    ],
+    "submit_message": "exp0010 deotte + freq + TE income",
+    "folds": 5,
+    "seed": 42,
+    "status": "wip"
+  },
+  "notes_md": "# exp0010 \u2014 deotte-te-income\n\n**Parent:** exp0001 (CV 0.94333 \u00b1 0.00070)\n\n**Hypothesis:** Fold-safe smoothed target encoding (m=20) of the exact `Annual_Income_USD`\nvalue, added to all three Deotte XGBs on top of `--freq`, lifts blend CV by >= 0.0001.\nIncome spike values (count 600-1000 each; 68 % of rows have count >= 100) carry\nvalue-specific target rates that are not smooth in income (68480 -> 0.270, 65800 -> 0.065,\n72441 -> 0.036, 131789 -> 0.353). `--freq` only flags a spike; 256-bin hist XGB cannot\nisolate 14.6k exact values.\n\n**Change:** new `--te` flag -> column `Annual_Income_USD_te`. Train rows: nested 5-fold\nOOF TE inside the outer train fold; val/test rows: map fit on the whole outer train fold\n(stored per fold model as `te_map_`). XGB params, folds (5, seed 42), recipe,\nbase_margin and 1/3 blend unchanged.\n",
+  "executor_checklist": [
+    "Read outputs/NEXT_STRATEGY.md fully before editing",
+    "features.py: add TE_COL, te_fit, te_apply, te_oof; FeatureBuilder(freq=False, te=False) sets self.te",
+    "deotte.py: _fit_fold adds Annual_Income_USD_te (te_oof for train, te_apply for val) and sets m.te_map_ when fb.te",
+    "deotte.py: _predict_variant transforms per model and applies m.te_map_ when fb.te",
+    "deotte.py: run_cv/train accept te kwarg; FeatureBuilder(freq=freq, te=te)",
+    "__main__.py: add --te flag, pass te=args.te to train_deotte",
+    "Write exps/exp0010/config.json and NOTES.md from iteration_plan.json",
+    "Smoke: python -m ev_s6e9 train --strategy deotte --freq --te --synth --no-log && python -m ev_s6e9 predict --strategy deotte",
+    "Do not change folds/seed/metric/XGB params; do not fit TE on validation rows",
+    "stop after edits"
+  ],
+  "planner_model": "claude-fable-5-1-thinking-high",
+  "exp_id": "exp0010",
+  "planner_backend": "cursor",
+  "archive_dir": "reports/plans/exp0010_20260912T012830Z_cursor",
+  "metrics": {
+    "id": "exp0010",
+    "cv_mean": 0.945522577935245,
+    "cv_std": 0.0006350545938990179,
+    "cv": "0.94552 \u00b1 0.00064",
+    "fold_aucs": [
+      0.9445644561273858,
+      0.9452725374868247,
+      0.9464896049186873,
+      0.9458325390311745,
+      0.9454537521121522
+    ],
+    "strategy": "deotte",
+    "params": {
+      "objective": "binary:logistic",
+      "n_estimators": 3000,
+      "learning_rate": 0.05,
+      "max_depth": 6,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "tree_method": "hist",
+      "device": "cpu",
+      "eval_metric": "auc",
+      "early_stopping_rounds": 100,
+      "verbosity": 0,
+      "n_jobs": -1
+    },
+    "status": "keep"
+  },
+  "verdict": "keep"
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+from sklearn.model_selection import StratifiedKFold
 
 from ev_s6e9.schema import CAT_COLS, FEATURE_COLS, ID_COL, NUM_COLS, TARGET, check_cols
 
@@ -12,6 +13,28 @@ HELPER_COLS = ["worry_score", "chargers_total", "income_x_subsidy", "concern_x_s
 RECIPE_COL = "recipe_score"
 FREQ_COLS = ["Annual_Income_USD", "Daily_Commute_km"]
 FREQ_SUFFIX = "_cnt"
+TE_COL = "Annual_Income_USD"
+
+
+def te_fit(vals: pd.Series, y: np.ndarray, m: float = 20.0) -> tuple[pd.Series, float]:
+    prior = float(np.mean(y))
+    g = pd.DataFrame({"v": vals.to_numpy(), "y": y}).groupby("v")["y"].agg(["sum", "count"])
+    return (g["sum"] + prior * m) / (g["count"] + m), prior
+
+
+def te_apply(vals: pd.Series, mapping: pd.Series, prior: float) -> np.ndarray:
+    return vals.map(mapping).fillna(prior).to_numpy(dtype=np.float32)
+
+
+def te_oof(
+    vals: pd.Series, y: np.ndarray, *, folds: int = 5, seed: int = 42, m: float = 20.0
+) -> np.ndarray:
+    """Nested out-of-fold TE for training rows (no row sees its own label)."""
+    out = np.zeros(len(vals), dtype=np.float32)
+    for tr, va in StratifiedKFold(folds, shuffle=True, random_state=seed).split(vals, y):
+        mp, prior = te_fit(vals.iloc[tr], y[tr], m)
+        out[va] = te_apply(vals.iloc[va], mp, prior)
+    return out
 
 
 def encode_target(s: pd.Series) -> pd.Series:
@@ -55,8 +78,9 @@ def _yes(s: pd.Series) -> pd.Series:
 class FeatureBuilder:
     """Deotte Fable 5.1: helper features, recipe score/logit, category codes."""
 
-    def __init__(self, freq: bool = False) -> None:
+    def __init__(self, freq: bool = False, te: bool = False) -> None:
         self.freq = freq
+        self.te = te
         self._cat_dtypes: dict[str, pd.CategoricalDtype] = {}
         self._freq_maps: dict[str, pd.Series] = {}
         self._fitted = False

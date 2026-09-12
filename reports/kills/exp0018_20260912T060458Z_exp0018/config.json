@@ -1,0 +1,23 @@
+{
+  "id": "exp0018",
+  "title": "deotte-te-income",
+  "hypothesis": "TBD \u2014 set by planner",
+  "parent": "exp0010",
+  "strategy": "deotte",
+  "train_args": [
+    "--strategy",
+    "deotte",
+    "--freq",
+    "--te",
+    "--note",
+    "exp0010: +fold-safe smoothed TE (m=20, nested OOF) of exact Annual_Income_USD on top of --freq"
+  ],
+  "predict_args": [
+    "--strategy",
+    "deotte"
+  ],
+  "submit_message": "exp0010 deotte + freq + TE income",
+  "folds": 5,
+  "seed": 42,
+  "status": "wip"
+}
