@@ -54,3 +54,13 @@ Template:
 - LB: —
 - Takeaway: exp0001: +freq-encoded income/commute (train+test value counts) in Deotte blend
 
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94336 ± 0.00070
+- LB: —
+- Takeaway: exp0008: +LightGBM m4 (num_leaves=63) as 4th equal-weight model in Deotte blend
+
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94333 ± 0.00070
+- LB: —
+- Takeaway: exp0009: OOF-searched m1/m2/m3 blend weights (nested LOFO grid, step 0.05) on top of exp0001 --freq
+

@@ -1,0 +1,10 @@
+{
+  "exp_id": "exp0009",
+  "title": "deotte-blend-weight-search",
+  "archived_at": "2026-09-12T00:36:17.775893+00:00",
+  "label": "cursor",
+  "planner_model": "claude-fable-5-1-thinking-high",
+  "planner_backend": "cursor",
+  "needs_code": true,
+  "dir": "reports/plans/exp0009_20260912T003617Z_cursor"
+}

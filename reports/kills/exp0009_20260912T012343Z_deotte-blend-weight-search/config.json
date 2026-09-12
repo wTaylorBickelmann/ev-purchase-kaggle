@@ -1,0 +1,26 @@
+{
+  "id": "exp0009",
+  "title": "deotte-blend-weight-search",
+  "hypothesis": "Replacing the fixed 1/3 blend of m1/m2/m3 with OOF-searched weights (nested leave-one-fold-out grid, step 0.05) lifts Deotte blend CV by >= 0.0001 over exp0001 (0.94333).",
+  "parent": "exp0001",
+  "strategy": "deotte",
+  "train_args": [
+    "--strategy",
+    "deotte",
+    "--freq",
+    "--blend-search",
+    "--note",
+    "exp0009: OOF-searched m1/m2/m3 blend weights (nested LOFO grid, step 0.05) on top of exp0001 --freq"
+  ],
+  "predict_args": [
+    "--strategy",
+    "deotte"
+  ],
+  "submit_message": "exp0009 deotte + freq + OOF blend weights",
+  "folds": 5,
+  "seed": 42,
+  "status": "wip",
+  "cv_mean": 0.9433299570067376,
+  "cv_std": 0.0007008197942259478,
+  "cv": "0.94333 \u00b1 0.00070"
+}

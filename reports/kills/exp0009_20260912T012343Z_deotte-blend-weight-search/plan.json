@@ -1,0 +1,53 @@
+{
+  "title": "deotte-blend-weight-search",
+  "hypothesis": "Replacing the fixed 1/3 blend of m1/m2/m3 with OOF-searched weights (nested leave-one-fold-out grid, step 0.05) lifts Deotte blend CV by >= 0.0001 over exp0001 (0.94333).",
+  "rationale": "STRATEGY queue item 2, never attempted. m1/m2/m3 differ in strength (base_margin vs recipe feature) so equal weighting is unlikely optimal. Zero extra model training, tiny 2-file change (executor-safe after two TE timeouts). Nested weight selection keeps CV honest.",
+  "one_change": "Add --blend-search flag: run_cv picks m1/m2/m3 blend weights on a simplex grid maximizing OOF AUC (weights for fold k chosen on the other 4 folds; full-OOF weights saved to outputs/blend_weights.json and used by predict_proba).",
+  "needs_code": true,
+  "code_instructions": "deotte.py: add _weight_grid(step=0.05) + search_weights(oofs, y, idx); add weights field to DeotteCvResult; run_cv/train get blend_search kwarg; in run_cv, if blend_search, compute nested LOFO weighted blend_oof and per-fold AUCs, else equal mean; save_run writes blend_weights.json + payload key; predict_proba uses np.average with saved weights. __main__.py: add --blend-search store_true and pass to train_deotte. Details in outputs/NEXT_STRATEGY.md.",
+  "files_to_edit": [
+    "src/ev_s6e9/deotte.py",
+    "src/ev_s6e9/__main__.py",
+    "exps/exp0009/config.json",
+    "exps/exp0009/NOTES.md"
+  ],
+  "config": {
+    "id": "exp0009",
+    "title": "deotte-blend-weight-search",
+    "hypothesis": "Replacing the fixed 1/3 blend of m1/m2/m3 with OOF-searched weights (nested leave-one-fold-out grid, step 0.05) lifts Deotte blend CV by >= 0.0001 over exp0001 (0.94333).",
+    "parent": "exp0001",
+    "strategy": "deotte",
+    "train_args": [
+      "--strategy",
+      "deotte",
+      "--freq",
+      "--blend-search",
+      "--note",
+      "exp0009: OOF-searched m1/m2/m3 blend weights (nested LOFO grid, step 0.05) on top of exp0001 --freq"
+    ],
+    "predict_args": [
+      "--strategy",
+      "deotte"
+    ],
+    "submit_message": "exp0009 deotte + freq + OOF blend weights",
+    "folds": 5,
+    "seed": 42,
+    "status": "wip"
+  },
+  "notes_md": "# exp0009 \u2014 deotte-blend-weight-search\n\n**Parent:** exp0001 (CV 0.94333 \u00b1 0.00070, `--freq`)\n\n**Hypothesis:** m1 (features), m2 (recipe base_margin) and m3 (recipe feature) are not\nequally strong, so replacing the fixed 1/3 blend with weights chosen on OOF lifts blend\nCV by >= 0.0001.\n\n**Change:** new `--blend-search` flag on `train --strategy deotte`. Weights are searched\non a simplex grid (step 0.05, 231 combos) maximizing OOF AUC. CV is kept honest: the\nweights used to score fold k are chosen on the other 4 folds' OOF (nested LOFO). The\nfull-OOF argmax weights are saved to `outputs/blend_weights.json` and used at predict\ntime. Features (`--freq`), XGB params, recipe, base_margin, folds (5, seed 42) unchanged.\n",
+  "executor_checklist": [
+    "Read outputs/NEXT_STRATEGY.md; edit only src/ev_s6e9/deotte.py and src/ev_s6e9/__main__.py",
+    "Add _weight_grid + search_weights helpers; add weights field; thread blend_search kwarg through train -> run_cv",
+    "In run_cv use idx=tr (other folds) to choose weights for each scored fold; full-OOF weights only for test",
+    "save_run writes blend_weights.json; predict_proba uses np.average with those weights (equal if file missing)",
+    "Add --blend-search flag in __main__.py and pass to train_deotte",
+    "Write exps/exp0009/config.json and NOTES.md from iteration_plan.json",
+    "Smoke: python -m ev_s6e9 train --strategy deotte --freq --blend-search --synth --no-log",
+    "Do not change folds/seed/metric/features/XGB params; do not train on real data or submit",
+    "stop after edits"
+  ],
+  "planner_model": "claude-fable-5-1-thinking-high",
+  "exp_id": "exp0009",
+  "planner_backend": "cursor",
+  "archive_dir": "reports/plans/exp0009_20260912T003617Z_cursor"
+}
