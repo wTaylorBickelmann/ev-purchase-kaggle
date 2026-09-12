@@ -14,7 +14,7 @@ Short table only. **Do not rewrite old rows.** Newest at bottom.
 | exp0002 | deotte-te-income-commute | — | — | kill | exec: executor timed out after 3600s |
 | exp0008 | deotte-plus-lgbm-m4 | 0.94336 ± 0.00070 | — | kill | best=0.94333 parent=exp0001 |
 | exp0009 | deotte-blend-weight-search | 0.94333 ± 0.00070 | — | kill | best=0.94333 parent=exp0001 |
-| exp0010 | deotte-te-income | 0.94552 ± 0.00064 | pending | **keep** | parent=exp0001 |
+| exp0010 | deotte-te-income | 0.94552 ± 0.00064 | 0.94561 | **keep** | parent=exp0001; public LB 0.94561 |
 | exp0011 | deotte-te-commute | 0.94557 ± 0.00061 | — | kill | best=0.94552 parent=exp0010 |
 | exp0012 | deotte-te-m2 | 0.94559 ± 0.00065 | — | kill | best=0.94552 parent=exp0010 |
 | exp0013 | deotte-lr02 | 0.94555 ± 0.00064 | — | kill | best=0.94552 parent=exp0010 |

@@ -1,0 +1,53 @@
+{
+  "title": "deotte-plus-lgbm-m4",
+  "hypothesis": "Adding a LightGBM model (num_leaves=63, lr=0.05, early-stop 100) on the m1 feature matrix as a 4th equal-weight member of the Deotte 3xXGB+freq blend lifts CV by >= 0.0001 via cross-library diversity",
+  "rationale": "Queue item 1 (3-seed blend) is killed (+0.00002); item 2 (blend weights) has nothing to gain since m1/m2/m3 CV are 0.94317/0.94322/0.94311 vs blend 0.94333; item 3 (LGBM 4th model) was never scored - its only attempt was an executor timeout, not a CV kill. The three XGB variants are ~0.99 correlated, so a second tree library (leaf-wise growth, different binning) is the cheapest source of decorrelated error. Plan is kept to 2 files / 13 verbatim one-line find-replace edits / 1 smoke command because 3-file plans timed out the Qwen executor three times.",
+  "one_change": "Add flag --lgbm to `train --strategy deotte`: when set, run_cv also trains DeotteVariant.LGBM ('m4') = LGBMClassifier(num_leaves=63, learning_rate=0.05, n_estimators=3000, subsample=0.8, subsample_freq=1, colsample_bytree=0.8, early stopping 100) on the m1 feature matrix; blend = equal mean over all trained variants (now 4). --freq kept; folds/seed/metric/XGB params/recipe unchanged.",
+  "needs_code": true,
+  "code_instructions": "Read outputs/NEXT_STRATEGY.md fully; every edit is a verbatim FIND -> REPLACE. STEP 1 src/ev_s6e9/deotte.py (11 edits): (1a) after `import joblib` add `import lightgbm as lgb`; (1b) model import becomes `from ev_s6e9.model import XGB_DEFAULTS, make_model, make_xgb_model, short_xgb_params`; (1c) after `RECIPE_FEATURE = \"m3\"` add `LGBM = \"m4\"`; (1d) in _fit_fold, right after the two fb.transform lines and BEFORE `m = make_xgb_model(seed=seed, **overrides)`, insert: `if variant == DeotteVariant.LGBM: m = make_model(seed=seed, n_estimators=int(overrides.get(\"n_estimators\", 3000)), learning_rate=0.05, num_leaves=63, subsample=0.8, subsample_freq=1, colsample_bytree=0.8); m.fit(x_tr, y_tr, eval_X=x_va, eval_y=y_va, callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)]); return m, m.predict_proba(x_va)[:, 1]`; (1e) run_cv signature: add `lgbm: bool = False,` after `freq: bool = False,` (the run_cv one is followed by `fb = FeatureBuilder(freq=freq).fit(train, test)`); (1f) in run_cv loop `for v in DeotteVariant:` add first body line `if v == DeotteVariant.LGBM and not lgbm: continue`; (1g) save_run: `for name in VARIANTS:` + mkdir line becomes `for name in cv.variants:`; (1h) train signature: add `lgbm: bool = False,` after `freq: bool = False,` and change the call to `cv = run_cv(df, test, folds=folds, seed=seed, model_overrides=model_overrides, freq=freq, lgbm=lgbm)`; (1i) train print loop `for name in VARIANTS: vc = cv.variants[name]` becomes `for name, vc in cv.variants.items():`; (1j) predict_proba: before `for name in VARIANTS:` add `names = list(json.loads((out / CV_JSON.name).read_text(encoding=\"utf-8\")).get(\"variants\") or VARIANTS)` and loop `for name in names:`. Leave VARIANTS, log_experiment, _predict_variant, run_variant_cv untouched. STEP 2 src/ev_s6e9/__main__.py (2 edits): (2a) after the `--freq` add_argument line add `t.add_argument(\"--lgbm\", action=\"store_true\", help=\"deotte: add LightGBM m4 (m1 features) as 4th blend member\")`; (2b) in the train_deotte(...) call add `lgbm=args.lgbm,` after `freq=args.freq,`. STEP 3 overwrite exps/exp0002/config.json with the `config` object of this plan. STEP 4 overwrite exps/exp0002/NOTES.md with `notes_md`. STEP 5 run ONLY the single smoke `python -c` command from NEXT_STRATEGY.md Step 5 (synth(800), folds=2, n_estimators=20, freq=True, lgbm=True; asserts variants == [m1,m2,m3,m4], save_run + predict_proba into a tempdir, and lgbm=False still gives [m1,m2,m3]); expect `ok`. Do NOT run `python -m ev_s6e9 train` (real or --synth), predict, submit, or pytest; do NOT edit features.py/model.py/train.py/predict.py/schema.py/tests; do NOT change folds/seed/metric/XGB params/recipe/blend weights; do NOT remove --freq. Stop after `ok`.",
+  "files_to_edit": [
+    "src/ev_s6e9/deotte.py",
+    "src/ev_s6e9/__main__.py",
+    "exps/exp0002/config.json",
+    "exps/exp0002/NOTES.md"
+  ],
+  "config": {
+    "id": "exp0002",
+    "title": "deotte-plus-lgbm-m4",
+    "hypothesis": "Adding a LightGBM model (num_leaves=63, lr=0.05, early-stop 100) on the m1 feature matrix as a 4th equal-weight member of the Deotte 3xXGB+freq blend lifts CV by >= 0.0001 via cross-library diversity",
+    "parent": "exp0001",
+    "strategy": "deotte",
+    "train_args": [
+      "--strategy",
+      "deotte",
+      "--freq",
+      "--lgbm",
+      "--note",
+      "exp0002: +LightGBM m4 (m1 features, num_leaves=63) as 4th equal-weight member of Deotte blend (freq kept)"
+    ],
+    "predict_args": [
+      "--strategy",
+      "deotte"
+    ],
+    "submit_message": "exp0002 deotte + freq + lgbm m4",
+    "folds": 5,
+    "seed": 42,
+    "status": "wip"
+  },
+  "notes_md": "# exp0002 — deotte-plus-lgbm-m4\n\n**Parent:** exp0001 (CV 0.94333 ± 0.00070)\n\n**Hypothesis:** Adding a LightGBM model (`m4`: num_leaves=63, lr=0.05, n_estimators=3000,\nsubsample=0.8/freq=1, colsample=0.8, early-stop 100) trained on the exact m1 feature matrix\n(helpers + freq counts) as a 4th equal-weight member of the Deotte 3xXGB blend lifts CV by\n>= 0.0001. The three XGB variants are ~0.99 correlated; a second tree library (leaf-wise\ngrowth, different histogram binning) is the cheapest source of decorrelated error.\n\n**Change:** new `--lgbm` flag on `train --strategy deotte`; `run_cv` trains `DeotteVariant.LGBM`\n(\"m4\") when set; blend = equal mean over all trained variants. `--freq` kept. Folds (5, seed 42),\nmetric, XGB params, recipe and base_margin unchanged. `predict_proba` reads the variant list\nfrom `cv.json` so predict stays consistent with train.\n",
+  "executor_checklist": [
+    "Read outputs/NEXT_STRATEGY.md fully before editing; every edit is a verbatim FIND -> REPLACE",
+    "deotte.py 1a-1c: `import lightgbm as lgb`; add `make_model` to the ev_s6e9.model import; add enum member `LGBM = \"m4\"`",
+    "deotte.py 1d: LightGBM branch in _fit_fold (make_model num_leaves=63 lr=0.05 subsample=0.8 subsample_freq=1 colsample_bytree=0.8; fit with eval_X/eval_y + early_stopping(100) callback; return m, predict_proba[:,1]) inserted BEFORE `m = make_xgb_model(...)`",
+    "deotte.py 1e-1f: run_cv gets `lgbm: bool = False`; loop skips DeotteVariant.LGBM unless lgbm",
+    "deotte.py 1g: save_run mkdir loop iterates `cv.variants` instead of VARIANTS",
+    "deotte.py 1h-1i: train gets `lgbm: bool = False`, passes `lgbm=lgbm` to run_cv, print loop iterates `cv.variants.items()`",
+    "deotte.py 1j: predict_proba builds `names` from cv.json variants (fallback VARIANTS) and loops over names",
+    "__main__.py 2a-2b: add `--lgbm` store_true after `--freq`; pass `lgbm=args.lgbm,` into train_deotte after `freq=args.freq,`",
+    "exps/exp0002/config.json == the `config` object (train_args: --strategy deotte --freq --lgbm --note ...; parent exp0001; folds 5; seed 42; status wip)",
+    "exps/exp0002/NOTES.md == notes_md",
+    "Run ONLY the Step 5 smoke `python -c` command once; expect `ok`",
+    "Do NOT run python -m ev_s6e9 train/predict/submit (real or --synth), do NOT run pytest, do NOT change folds/seed/metric/XGB params/recipe/blend weights, do NOT edit features.py/model.py/train.py/predict.py/schema.py/tests/LEARNINGS.md/reports/",
+    "stop after edits"
+  ]
+}
