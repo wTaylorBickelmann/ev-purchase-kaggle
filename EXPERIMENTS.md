@@ -64,3 +64,8 @@ Template:
 - LB: —
 - Takeaway: exp0009: OOF-searched m1/m2/m3 blend weights (nested LOFO grid, step 0.05) on top of exp0001 --freq
 
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94552 ± 0.00064
+- LB: —
+- Takeaway: exp0010: +fold-safe smoothed TE (m=20, nested OOF) of exact Annual_Income_USD on top of --freq
+

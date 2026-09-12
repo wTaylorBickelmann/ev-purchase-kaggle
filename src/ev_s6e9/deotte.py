@@ -13,7 +13,7 @@ import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 
 from ev_s6e9.experiments import append_chunk, format_chunk
-from ev_s6e9.features import FeatureBuilder, encode_target
+from ev_s6e9.features import FeatureBuilder, TE_COL, encode_target, te_apply, te_fit, te_oof
 from ev_s6e9.metrics import auc, fmt_cv, mean_std
 from ev_s6e9.model import XGB_DEFAULTS, make_xgb_model, short_xgb_params
 from ev_s6e9.paths import CV_JSON, OOF_CSV, OUTPUTS
@@ -65,6 +65,13 @@ def _fit_fold(
     x_tr = fb.transform(raw_tr, with_recipe=with_recipe)
     x_va = fb.transform(raw_va, with_recipe=with_recipe)
     m = make_xgb_model(seed=seed, **overrides)
+    if fb.te:
+        v_tr = pd.to_numeric(raw_tr[TE_COL], errors="coerce")
+        v_va = pd.to_numeric(raw_va[TE_COL], errors="coerce")
+        mp, prior = te_fit(v_tr, y_tr)
+        x_tr[TE_COL + "_te"] = te_oof(v_tr, y_tr, seed=seed)
+        x_va[TE_COL + "_te"] = te_apply(v_va, mp, prior)
+        m.te_map_ = (mp, prior)
     if use_margin:
         margin_tr = fb.recipe_logit(raw_tr)
         margin_va = fb.recipe_logit(raw_va)
@@ -123,8 +130,9 @@ def run_cv(
     seed: int = 42,
     model_overrides: dict | None = None,
     freq: bool = False,
+    te: bool = False,
 ) -> DeotteCvResult:
-    fb = FeatureBuilder(freq=freq).fit(train, test)
+    fb = FeatureBuilder(freq=freq, te=te).fit(train, test)
     variants: dict[str, VariantCv] = {}
     oofs = []
     for v in DeotteVariant:
@@ -199,8 +207,9 @@ def train(
     out: Path | None = None,
     model_overrides: dict | None = None,
     freq: bool = False,
+    te: bool = False,
 ) -> DeotteCvResult:
-    cv = run_cv(df, test, folds=folds, seed=seed, model_overrides=model_overrides, freq=freq)
+    cv = run_cv(df, test, folds=folds, seed=seed, model_overrides=model_overrides, freq=freq, te=te)
     save_run(df, cv, out=out)
     if log:
         log_experiment(cv, folds=folds, note=note, path=experiments_path)
@@ -221,12 +230,25 @@ def _predict_variant(
     v = DeotteVariant(variant)
     use_margin = v == DeotteVariant.BASE_MARGIN
     with_recipe = v == DeotteVariant.RECIPE_FEATURE
-    x = fb.transform(df, with_recipe=with_recipe)
     if use_margin:
         margin = fb.recipe_logit(df)
-        ps = [m.predict_proba(x, base_margin=margin)[:, 1] for m in models]
+        ps = []
+        for m in models:
+            x = fb.transform(df, with_recipe=with_recipe)
+            if fb.te:
+                x[TE_COL + "_te"] = te_apply(
+                    pd.to_numeric(df[TE_COL], errors="coerce"), *m.te_map_
+                )
+            ps.append(m.predict_proba(x, base_margin=margin)[:, 1])
     else:
-        ps = [m.predict_proba(x)[:, 1] for m in models]
+        ps = []
+        for m in models:
+            x = fb.transform(df, with_recipe=with_recipe)
+            if fb.te:
+                x[TE_COL + "_te"] = te_apply(
+                    pd.to_numeric(df[TE_COL], errors="coerce"), *m.te_map_
+                )
+            ps.append(m.predict_proba(x)[:, 1])
     return np.mean(ps, axis=0)
 
 

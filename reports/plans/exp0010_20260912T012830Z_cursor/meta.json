@@ -1,0 +1,10 @@
+{
+  "exp_id": "exp0010",
+  "title": "deotte-te-income",
+  "archived_at": "2026-09-12T01:28:30.387900+00:00",
+  "label": "cursor",
+  "planner_model": "claude-fable-5-1-thinking-high",
+  "planner_backend": "cursor",
+  "needs_code": true,
+  "dir": "reports/plans/exp0010_20260912T012830Z_cursor"
+}
