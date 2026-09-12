@@ -69,3 +69,28 @@ Template:
 - LB: —
 - Takeaway: exp0010: +fold-safe smoothed TE (m=20, nested OOF) of exact Annual_Income_USD on top of --freq
 
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94557 ± 0.00061
+- LB: —
+- Takeaway: exp0011: +fold-safe TE (m=20, nested OOF) of exact Daily_Commute_km alongside income TE, on top of --freq
+
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94559 ± 0.00065
+- LB: —
+- Takeaway: exp0012: income TE smoothing m=20 -> 2 (new --te-m flag), on top of --freq
+
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.02 max_depth=6), 5-fold
+- CV: 0.94555 ± 0.00064
+- LB: —
+- Takeaway: exp0013: XGB learning_rate 0.05 -> 0.02 (new --lr flag), on top of --freq --te income
+
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94551 ± 0.00063
+- LB: —
+- Takeaway: exp0015: +fold-safe smoothed TE (m=20, nested OOF) of (Annual_Income_USD, Daily_Commute_km) pair key on top of --freq --te
+
+### 2026-09-12 — Deotte XGB 3-model blend (n_estimators=3000 lr=0.05 max_depth=6), 5-fold
+- CV: 0.94553 ± 0.00063
+- LB: —
+- Takeaway: exp0016: +orig_income_te (mean original-dataset label per exact Annual_Income_USD) on top of --freq --te
+

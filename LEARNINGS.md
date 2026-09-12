@@ -20,3 +20,11 @@ Template:
 - 2026-09-11 exp0002: EXECUTOR FAILED — executor timed out after 3600s
 - 2026-09-12 exp0008: deotte-plus-lgbm-m4 → CV 0.94336 ± 0.00070 vs best 0.94333 ± 0.00070 — kill
 - 2026-09-12 exp0009: deotte-blend-weight-search → CV 0.94333 ± 0.00070 vs best 0.94333 ± 0.00070 — kill
+- 2026-09-12 exp0011: deotte-te-commute → CV 0.94557 ± 0.00061 vs best 0.94552 ± 0.00064 — kill
+- 2026-09-12 exp0012: deotte-te-m2 → CV 0.94559 ± 0.00065 vs best 0.94552 ± 0.00064 — kill
+- 2026-09-12 exp0013: deotte-lr02 → CV 0.94555 ± 0.00064 vs best 0.94552 ± 0.00064 — kill
+- 2026-09-12 exp0014: PLANNER FAILED — Cursor planner timed out after 900s
+- 2026-09-12 exp0015: deotte-te-pair → CV 0.94551 ± 0.00063 vs best 0.94552 ± 0.00064 — kill
+- 2026-09-12 exp0016: deotte-orig-te → CV 0.94553 ± 0.00063 vs best 0.94552 ± 0.00064 — kill
+- 2026-09-12 exp0017: PLANNER FAILED — Cursor planner timed out after 900s
+- 2026-09-12 exp0018: PLANNER FAILED — Cursor planner exited 1; see /Users/will/Documents/code_projects/ev-purchase-kaggle/logs/loop/planner_cursor_1789193067.log
